@@ -1,0 +1,8 @@
+# Robots.txt für PSM Statistik
+# https://st.digitale-psm.de
+
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://st.digitale-psm.de/sitemap-index.xml
