@@ -95,7 +95,7 @@ import StatCard from '../../components/StatCard.astro';
   
   interface KulturRow {
     kultur: string;
-    kultur_gruppe: string | null;
+    gruppe: string | null;
     awg_count: number;
     mittel_count: number;
   }
@@ -126,24 +126,27 @@ import StatCard from '../../components/StatCard.astro';
     await initDatabase();
 
     // Hauptdaten laden: Kulturen mit Anzahl Anwendungsgebiete UND Anzahl einzigartige Mittel
+    // LEFT JOIN mit bvl_kultur_gruppe um Gruppen-Namen zu bekommen
     allKulturen = await query<KulturRow>(`
       SELECT 
         ak.kultur,
-        ak.kultur_gruppe,
+        kg.gruppe,
         COUNT(*) as awg_count,
-        COUNT(DISTINCT ak.kennr) as mittel_count
+        COUNT(DISTINCT ak.awg_id) as mittel_count
       FROM bvl_awg_kultur ak
-      GROUP BY ak.kultur, ak.kultur_gruppe
+      LEFT JOIN bvl_kultur_gruppe kg ON ak.kultur = kg.kultur
+      GROUP BY ak.kultur
       ORDER BY mittel_count DESC, awg_count DESC
     `);
 
     // Kultur-Gruppen laden
     kulturGruppen = await query<KulturGruppe>(`
       SELECT 
-        COALESCE(kultur_gruppe, 'Sonstige') as gruppe,
+        COALESCE(kg.gruppe, 'Sonstige') as gruppe,
         COUNT(*) as anzahl
-      FROM bvl_awg_kultur
-      GROUP BY kultur_gruppe
+      FROM bvl_awg_kultur ak
+      LEFT JOIN bvl_kultur_gruppe kg ON ak.kultur = kg.kultur
+      GROUP BY kg.gruppe
       ORDER BY anzahl DESC
     `);
 
@@ -185,7 +188,7 @@ import StatCard from '../../components/StatCard.astro';
     const select = document.getElementById('filter-gruppe') as HTMLSelectElement;
     if (!select) return;
 
-    const gruppen = [...new Set(allKulturen.map(k => k.kultur_gruppe || 'Sonstige'))].sort();
+    const gruppen = [...new Set(allKulturen.map(k => k.gruppe || 'Sonstige'))].sort();
     gruppen.forEach(gruppe => {
       const option = document.createElement('option');
       option.value = gruppe;
@@ -213,9 +216,9 @@ import StatCard from '../../components/StatCard.astro';
           const percentMittel = ((kultur.mittel_count / totalMittel) * 100).toFixed(1);
           return `
             <strong>${data.name}</strong><br/>
-            <span style="color: ${CHART_COLORS[0]}">●</span> Zugelassene Mittel: <strong>${kultur.mittel_count.toLocaleString('de-DE')}</strong><br/>
-            <span style="color: ${CHART_COLORS[1]}">●</span> Anwendungsgebiete: ${kultur.awg_count.toLocaleString('de-DE')}<br/>
-            Gruppe: ${kultur.kultur_gruppe || 'k.A.'}<br/>
+            <span style="color: ${CHART_COLORS[0]}">●</span> Anwendungsgebiete: <strong>${kultur.awg_count.toLocaleString('de-DE')}</strong><br/>
+            <span style="color: ${CHART_COLORS[1]}">●</span> Zugelassene AWG: ${kultur.mittel_count.toLocaleString('de-DE')}<br/>
+            Gruppe: ${kultur.gruppe || 'k.A.'}<br/>
             Anteil: ${percentMittel}%
           `;
         }
@@ -228,7 +231,7 @@ import StatCard from '../../components/StatCard.astro';
       },
       xAxis: {
         type: 'value',
-        name: 'Anzahl zugelassene Mittel',
+        name: 'Anzahl Anwendungsgebiete',
         nameLocation: 'middle',
         nameGap: 30,
         axisLabel: { color: '#a6b5c2' },
@@ -247,10 +250,10 @@ import StatCard from '../../components/StatCard.astro';
         axisLine: { lineStyle: { color: '#2a3f52' } }
       },
       series: [{
-        name: 'Zugelassene Mittel',
+        name: 'Anwendungsgebiete',
         type: 'bar',
         data: top25.map((k, i) => ({
-          value: k.mittel_count,
+          value: k.awg_count,
           itemStyle: { 
             color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
               { offset: 0, color: CHART_COLORS[i % CHART_COLORS.length] },
@@ -340,39 +343,20 @@ import StatCard from '../../components/StatCard.astro';
     const chartEl = document.getElementById('chart-kultur-trend');
     if (!chartEl) return;
 
-    // Kategorisiere Kulturen
-    const kategorien: Record<string, number> = {
-      'Getreide': 0,
-      'Obst': 0,
-      'Gemüse': 0,
-      'Zierpflanzen': 0,
-      'Ackerbau': 0,
-      'Sonderkulturen': 0
-    };
-
+    // Kategorisiere nach Gruppen
+    const kategorien: Record<string, number> = {};
+    
     allKulturen.forEach(k => {
-      const gruppe = (k.kultur_gruppe || '').toLowerCase();
-      const kultur = k.kultur.toLowerCase();
-      
-      if (gruppe.includes('getreide') || ['weizen', 'gerste', 'roggen', 'hafer', 'mais', 'triticale'].some(g => kultur.includes(g))) {
-        kategorien['Getreide'] += k.awg_count;
-      } else if (gruppe.includes('obst') || gruppe.includes('kern') || gruppe.includes('stein') || gruppe.includes('beeren')) {
-        kategorien['Obst'] += k.awg_count;
-      } else if (gruppe.includes('gemüse') || gruppe.includes('kohl') || gruppe.includes('wurzel') || gruppe.includes('salat')) {
-        kategorien['Gemüse'] += k.awg_count;
-      } else if (gruppe.includes('zier') || gruppe.includes('blume')) {
-        kategorien['Zierpflanzen'] += k.awg_count;
-      } else if (['raps', 'rübe', 'kartoffel', 'sonnenblume', 'soja', 'erbse', 'bohne'].some(g => kultur.includes(g))) {
-        kategorien['Ackerbau'] += k.awg_count;
-      } else {
-        kategorien['Sonderkulturen'] += k.awg_count;
-      }
+      const gruppe = k.gruppe || 'Sonstige';
+      kategorien[gruppe] = (kategorien[gruppe] || 0) + k.awg_count;
     });
 
-    const chart = echarts.init(chartEl, 'psm');
-    
+    // Top 8 Kategorien
     const sortedKategorien = Object.entries(kategorien)
-      .sort((a, b) => b[1] - a[1]);
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8);
+
+    const chart = echarts.init(chartEl, 'psm');
     
     chart.setOption({
       tooltip: {
@@ -382,7 +366,7 @@ import StatCard from '../../components/StatCard.astro';
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '15%',
+        bottom: '20%',
         top: '10%',
         containLabel: true
       },
@@ -391,7 +375,8 @@ import StatCard from '../../components/StatCard.astro';
         data: sortedKategorien.map(k => k[0]),
         axisLabel: { 
           color: '#a6b5c2',
-          rotate: 30
+          rotate: 45,
+          fontSize: 10
         },
         axisLine: { lineStyle: { color: '#2a3f52' } }
       },
@@ -435,13 +420,13 @@ import StatCard from '../../components/StatCard.astro';
     if (searchTerm) {
       filtered = filtered.filter(k => 
         k.kultur.toLowerCase().includes(searchTerm) ||
-        (k.kultur_gruppe || '').toLowerCase().includes(searchTerm)
+        (k.gruppe || '').toLowerCase().includes(searchTerm)
       );
     }
 
     // Gruppen-Filter
     if (gruppeFilter) {
-      filtered = filtered.filter(k => (k.kultur_gruppe || 'Sonstige') === gruppeFilter);
+      filtered = filtered.filter(k => (k.gruppe || 'Sonstige') === gruppeFilter);
     }
 
     // Sortierung
@@ -470,11 +455,11 @@ import StatCard from '../../components/StatCard.astro';
       return;
     }
 
-    const maxMittel = Math.max(...data.map(k => k.mittel_count));
+    const maxAwg = Math.max(...data.map(k => k.awg_count));
 
     tbody.innerHTML = data.slice(0, 150).map((k, i) => {
-      const percent = ((k.mittel_count / maxMittel) * 100).toFixed(1);
-      const anteilGesamt = ((k.mittel_count / totalMittel) * 100).toFixed(2);
+      const percent = ((k.awg_count / maxAwg) * 100).toFixed(1);
+      const anteilGesamt = ((k.awg_count / totalAwg) * 100).toFixed(2);
       return `
         <tr>
           <td class="col-rank">${i + 1}</td>
@@ -482,7 +467,7 @@ import StatCard from '../../components/StatCard.astro';
             <span class="kultur-name">${k.kultur}</span>
           </td>
           <td class="col-gruppe">
-            <span class="gruppe-badge">${k.kultur_gruppe || 'Sonstige'}</span>
+            <span class="gruppe-badge">${k.gruppe || 'Sonstige'}</span>
           </td>
           <td class="col-awg">${k.awg_count.toLocaleString('de-DE')}</td>
           <td class="col-mittel">
