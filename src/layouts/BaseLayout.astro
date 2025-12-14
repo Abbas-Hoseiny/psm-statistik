@@ -47,11 +47,27 @@ const { title, description = 'Statistik-Dashboard für Pflanzenschutzmittel-Date
     </main>
 
     <footer class="footer">
-      <p>
-        Daten: <a href="https://www.bvl.bund.de" target="_blank">Bundesamt für Verbraucherschutz (BVL)</a>
-        · Aktualisierung alle 2 Tage
-        · <a href="https://github.com/Abbas-Hoseiny/psm-statistik" target="_blank">GitHub</a>
-      </p>
+      <div class="footer-content">
+        <div class="footer-links">
+          <a href="https://digitale-psm.de" target="_blank" rel="noopener">
+            🌱 Digitale PSM
+          </a>
+          <span class="divider">·</span>
+          <a href="https://info.digitale-psm.de" target="_blank" rel="noopener">
+            ℹ️ Info & Lizenz
+          </a>
+          <span class="divider">·</span>
+          <a href="https://github.com/Abbas-Hoseiny/psm-statistik" target="_blank" rel="noopener">
+            GitHub
+          </a>
+        </div>
+        <div class="footer-info">
+          Daten: <a href="https://www.bvl.bund.de/DE/Arbeitsbereiche/01_Verbraucherprodukte/02_Verbraucher/03_Pflanzenschutzmittel/pflanzenschutzmittel_node.html" target="_blank" rel="noopener">Bundesamt für Verbraucherschutz (BVL)</a> · Automatische Aktualisierung alle 2 Tage
+        </div>
+        <div class="footer-copyright">
+          © 2025 Abbas Hoseiny · Open Source unter MIT-Lizenz
+        </div>
+      </div>
     </footer>
   </body>
 </html>
@@ -201,14 +217,58 @@ const { title, description = 'Statistik-Dashboard für Pflanzenschutzmittel-Date
 
   .footer {
     border-top: 1px solid var(--border-1);
-    padding: var(--sp-4) var(--sp-6);
+    padding: var(--sp-6) var(--sp-6);
     text-align: center;
     color: var(--text-dim);
     font-size: 0.8rem;
+    background: var(--surface-1);
   }
 
-  .footer a {
+  .footer-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+
+  .footer-links {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+  }
+
+  .footer-links a {
     color: var(--text-muted);
+    transition: color 0.2s;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--r-sm);
+  }
+
+  .footer-links a:hover {
+    color: var(--primary);
+    background: var(--primary-subtle);
+  }
+
+  .footer-links .divider {
+    color: var(--border-2);
+  }
+
+  .footer-info {
+    color: var(--text-dim);
+  }
+
+  .footer-info a {
+    color: var(--text-muted);
+  }
+
+  .footer-copyright {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    margin-top: var(--sp-2);
   }
 
   @media (max-width: 768px) {
