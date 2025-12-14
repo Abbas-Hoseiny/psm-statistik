@@ -1,6 +1,6 @@
 ---
 /**
- * Kulturen-Statistiken - mit deutschen Namen und Zulassungsdaten
+ * Kulturen-Statistiken - mit deutschen Namen aus bvl_kode
  */
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import ChartContainer from '../../components/ChartContainer.astro';
@@ -19,14 +19,14 @@ import StatCard from '../../components/StatCard.astro';
       <StatCard id="stat-kulturen" title="Kulturen gesamt" value="..." icon="🌾" />
       <StatCard id="stat-awg" title="Anwendungsgebiete" value="..." icon="📋" color="info" />
       <StatCard id="stat-top-kultur" title="Top Kultur" value="..." icon="🏆" color="warning" />
-      <StatCard id="stat-produkte-pro-kultur" title="⌀ Produkte/Kultur" value="..." icon="📊" color="danger" />
+      <StatCard id="stat-produkte-pro-kultur" title="⌀ AWG/Kultur" value="..." icon="📊" color="danger" />
     </div>
 
     <!-- Haupt-Chart: Top Kulturen nach Zulassungen -->
     <div class="charts-grid">
       <ChartContainer 
         id="chart-kulturen-zulassungen"
-        title="Top 25 Kulturen nach Anzahl zugelassener Mittel"
+        title="Top 25 Kulturen nach Anzahl Anwendungsgebiete"
         height="600px"
         class="chart-full"
       />
@@ -41,7 +41,7 @@ import StatCard from '../../components/StatCard.astro';
       />
       <ChartContainer 
         id="chart-kultur-trend"
-        title="Anwendungsgebiete nach Kultur-Kategorie"
+        title="Top 10 Kultur-Gruppen"
         height="400px"
       />
     </div>
@@ -59,7 +59,6 @@ import StatCard from '../../components/StatCard.astro';
           <option value="">Alle Gruppen</option>
         </select>
         <select id="sort-by" class="filter-select">
-          <option value="zulassungen">Nach Zulassungen</option>
           <option value="awg">Nach Anwendungsgebieten</option>
           <option value="name">Nach Name (A-Z)</option>
         </select>
@@ -71,9 +70,9 @@ import StatCard from '../../components/StatCard.astro';
             <tr>
               <th class="col-rank">#</th>
               <th class="col-kultur">Kultur</th>
+              <th class="col-code">EPPO-Code</th>
               <th class="col-gruppe">Gruppe</th>
               <th class="col-awg">Anwendungsgebiete</th>
-              <th class="col-mittel">Zugelassene Mittel</th>
               <th class="col-anteil">Anteil</th>
             </tr>
           </thead>
@@ -94,10 +93,10 @@ import StatCard from '../../components/StatCard.astro';
   echarts.registerTheme('psm', psmTheme);
   
   interface KulturRow {
-    kultur: string;
+    kultur_code: string;
+    kultur_name: string;
     gruppe: string | null;
     awg_count: number;
-    mittel_count: number;
   }
 
   interface KulturGruppe {
@@ -108,7 +107,6 @@ import StatCard from '../../components/StatCard.astro';
   let allKulturen: KulturRow[] = [];
   let kulturGruppen: KulturGruppe[] = [];
   let totalAwg = 0;
-  let totalMittel = 0;
 
   function hideLoading(chartId: string) {
     const loading = document.getElementById(`${chartId}-loading`);
@@ -125,18 +123,18 @@ import StatCard from '../../components/StatCard.astro';
   async function init() {
     await initDatabase();
 
-    // Hauptdaten laden: Kulturen mit Anzahl Anwendungsgebiete UND Anzahl einzigartige Mittel
-    // LEFT JOIN mit bvl_kultur_gruppe um Gruppen-Namen zu bekommen
+    // Hauptdaten laden: Kulturen mit deutschen Namen aus bvl_kode (kodeliste 948, sprache DE)
     allKulturen = await query<KulturRow>(`
       SELECT 
-        ak.kultur,
+        ak.kultur as kultur_code,
+        COALESCE(kd.kodetext, ak.kultur) as kultur_name,
         kg.gruppe,
-        COUNT(*) as awg_count,
-        COUNT(DISTINCT ak.awg_id) as mittel_count
+        COUNT(*) as awg_count
       FROM bvl_awg_kultur ak
+      LEFT JOIN bvl_kode kd ON ak.kultur = kd.kode AND kd.kodeliste = 948 AND kd.sprache = 'DE'
       LEFT JOIN bvl_kultur_gruppe kg ON ak.kultur = kg.kultur
       GROUP BY ak.kultur
-      ORDER BY mittel_count DESC, awg_count DESC
+      ORDER BY awg_count DESC
     `);
 
     // Kultur-Gruppen laden
@@ -150,9 +148,8 @@ import StatCard from '../../components/StatCard.astro';
       ORDER BY anzahl DESC
     `);
 
-    // Totals berechnen
+    // Total berechnen
     totalAwg = allKulturen.reduce((sum, k) => sum + k.awg_count, 0);
-    totalMittel = allKulturen.reduce((sum, k) => sum + k.mittel_count, 0);
 
     // Filter-Dropdown befüllen
     populateFilterDropdown();
@@ -161,12 +158,12 @@ import StatCard from '../../components/StatCard.astro';
     updateStatCard('kulturen-gesamt', allKulturen.length);
     updateStatCard('anwendungsgebiete', totalAwg);
     if (allKulturen.length > 0) {
-      updateStatCard('top-kultur', allKulturen[0].kultur);
+      updateStatCard('top-kultur', allKulturen[0].kultur_name);
     }
-    const avgMittelPerKultur = allKulturen.length > 0 
-      ? (totalMittel / allKulturen.length).toFixed(1) 
+    const avgAwgPerKultur = allKulturen.length > 0 
+      ? (totalAwg / allKulturen.length).toFixed(1) 
       : '0';
-    updateStatCard('⌀-produkte/kultur', avgMittelPerKultur);
+    updateStatCard('⌀-awg/kultur', avgAwgPerKultur);
 
     // Charts laden
     await Promise.all([
@@ -211,20 +208,20 @@ import StatCard from '../../components/StatCard.astro';
         axisPointer: { type: 'shadow' },
         formatter: (params: any) => {
           const data = params[0];
-          const kultur = top25.find(k => k.kultur === data.name);
+          const kultur = top25.find(k => k.kultur_name === data.name);
           if (!kultur) return '';
-          const percentMittel = ((kultur.mittel_count / totalMittel) * 100).toFixed(1);
+          const percent = ((kultur.awg_count / totalAwg) * 100).toFixed(1);
           return `
             <strong>${data.name}</strong><br/>
+            EPPO-Code: <code>${kultur.kultur_code}</code><br/>
             <span style="color: ${CHART_COLORS[0]}">●</span> Anwendungsgebiete: <strong>${kultur.awg_count.toLocaleString('de-DE')}</strong><br/>
-            <span style="color: ${CHART_COLORS[1]}">●</span> Zugelassene AWG: ${kultur.mittel_count.toLocaleString('de-DE')}<br/>
             Gruppe: ${kultur.gruppe || 'k.A.'}<br/>
-            Anteil: ${percentMittel}%
+            Anteil: ${percent}%
           `;
         }
       },
       grid: {
-        left: '22%',
+        left: '25%',
         right: '4%',
         top: '3%',
         bottom: '3%'
@@ -239,10 +236,10 @@ import StatCard from '../../components/StatCard.astro';
       },
       yAxis: {
         type: 'category',
-        data: top25.map(k => k.kultur).reverse(),
+        data: top25.map(k => k.kultur_name).reverse(),
         axisLabel: { 
           color: '#a6b5c2',
-          width: 160,
+          width: 180,
           overflow: 'truncate',
           ellipsis: '...',
           fontSize: 11
@@ -351,10 +348,10 @@ import StatCard from '../../components/StatCard.astro';
       kategorien[gruppe] = (kategorien[gruppe] || 0) + k.awg_count;
     });
 
-    // Top 8 Kategorien
+    // Top 10 Kategorien
     const sortedKategorien = Object.entries(kategorien)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8);
+      .slice(0, 10);
 
     const chart = echarts.init(chartEl, 'psm');
     
@@ -366,7 +363,7 @@ import StatCard from '../../components/StatCard.astro';
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '20%',
+        bottom: '25%',
         top: '10%',
         containLabel: true
       },
@@ -376,13 +373,13 @@ import StatCard from '../../components/StatCard.astro';
         axisLabel: { 
           color: '#a6b5c2',
           rotate: 45,
-          fontSize: 10
+          fontSize: 9
         },
         axisLine: { lineStyle: { color: '#2a3f52' } }
       },
       yAxis: {
         type: 'value',
-        name: 'Anwendungsgebiete',
+        name: 'AWG',
         axisLabel: { color: '#a6b5c2' },
         splitLine: { lineStyle: { color: '#1b3448' } }
       },
@@ -399,7 +396,7 @@ import StatCard from '../../components/StatCard.astro';
           show: true,
           position: 'top',
           color: '#a6b5c2',
-          fontSize: 10,
+          fontSize: 9,
           formatter: (params: any) => params.value.toLocaleString('de-DE')
         }
       }]
@@ -412,14 +409,15 @@ import StatCard from '../../components/StatCard.astro';
   function filterAndRenderTable() {
     const searchTerm = (document.getElementById('search-kultur') as HTMLInputElement)?.value.toLowerCase() || '';
     const gruppeFilter = (document.getElementById('filter-gruppe') as HTMLSelectElement)?.value || '';
-    const sortBy = (document.getElementById('sort-by') as HTMLSelectElement)?.value || 'zulassungen';
+    const sortBy = (document.getElementById('sort-by') as HTMLSelectElement)?.value || 'awg';
 
     let filtered = allKulturen;
 
-    // Search-Filter
+    // Search-Filter (sucht in deutschem Namen UND EPPO-Code)
     if (searchTerm) {
       filtered = filtered.filter(k => 
-        k.kultur.toLowerCase().includes(searchTerm) ||
+        k.kultur_name.toLowerCase().includes(searchTerm) ||
+        k.kultur_code.toLowerCase().includes(searchTerm) ||
         (k.gruppe || '').toLowerCase().includes(searchTerm)
       );
     }
@@ -432,9 +430,8 @@ import StatCard from '../../components/StatCard.astro';
     // Sortierung
     filtered = [...filtered].sort((a, b) => {
       switch (sortBy) {
-        case 'awg': return b.awg_count - a.awg_count;
-        case 'name': return a.kultur.localeCompare(b.kultur, 'de');
-        default: return b.mittel_count - a.mittel_count;
+        case 'name': return a.kultur_name.localeCompare(b.kultur_name, 'de');
+        default: return b.awg_count - a.awg_count;
       }
     });
 
@@ -464,16 +461,18 @@ import StatCard from '../../components/StatCard.astro';
         <tr>
           <td class="col-rank">${i + 1}</td>
           <td class="col-kultur">
-            <span class="kultur-name">${k.kultur}</span>
+            <span class="kultur-name">${k.kultur_name}</span>
+          </td>
+          <td class="col-code">
+            <code class="eppo-code">${k.kultur_code}</code>
           </td>
           <td class="col-gruppe">
             <span class="gruppe-badge">${k.gruppe || 'Sonstige'}</span>
           </td>
-          <td class="col-awg">${k.awg_count.toLocaleString('de-DE')}</td>
-          <td class="col-mittel">
-            <div class="mittel-bar">
-              <div class="mittel-fill" style="width: ${percent}%"></div>
-              <span class="mittel-count">${k.mittel_count.toLocaleString('de-DE')}</span>
+          <td class="col-awg">
+            <div class="awg-bar">
+              <div class="awg-fill" style="width: ${percent}%"></div>
+              <span class="awg-count">${k.awg_count.toLocaleString('de-DE')}</span>
             </div>
           </td>
           <td class="col-anteil">${anteilGesamt}%</td>
@@ -632,6 +631,19 @@ import StatCard from '../../components/StatCard.astro';
     font-weight: 500;
   }
 
+  .col-code {
+    min-width: 100px;
+  }
+
+  .eppo-code {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-size: 0.75rem;
+    background: var(--surface-3);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    color: var(--primary);
+  }
+
   .col-gruppe {
     min-width: 140px;
   }
@@ -651,11 +663,11 @@ import StatCard from '../../components/StatCard.astro';
     white-space: nowrap;
   }
 
-  .col-mittel {
+  .col-awg {
     min-width: 180px;
   }
 
-  .mittel-bar {
+  .awg-bar {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
@@ -665,7 +677,7 @@ import StatCard from '../../components/StatCard.astro';
     position: relative;
   }
 
-  .mittel-fill {
+  .awg-fill {
     height: 24px;
     background: linear-gradient(90deg, var(--primary), var(--primary-light, #4ade80));
     border-radius: var(--r-sm);
@@ -676,7 +688,7 @@ import StatCard from '../../components/StatCard.astro';
     top: 0;
   }
 
-  .mittel-count {
+  .awg-count {
     position: relative;
     z-index: 1;
     font-weight: 600;

@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "astro": "^5.1.1",
-    "echarts": "^5.5.1",
-    "sql.js": "^1.11.0"
+    "echarts": "^5.5.1"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
+    "sql.js": "^1.13.0",
     "typescript": "^5.7.2"
   },
   "repository": {
