@@ -1,0 +1,306 @@
+---
+/**
+ * Wirkstoffe-Statistiken
+ */
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import ChartContainer from '../../components/ChartContainer.astro';
+---
+
+<BaseLayout title="Wirkstoffe">
+  <div class="page">
+    <header class="page-header">
+      <h1>⚗️ Wirkstoff-Statistiken</h1>
+      <p>Analyse der in der BVL-Datenbank registrierten Wirkstoffe</p>
+    </header>
+
+    <div class="charts-grid">
+      <ChartContainer 
+        id="chart-kategorien" 
+        title="Wirkstoffe nach Kategorie"
+        height="400px"
+      />
+      <ChartContainer 
+        id="chart-top-wirkstoffe" 
+        title="Top 20 Wirkstoffe (nach Anzahl Produkte)"
+        height="500px"
+      />
+    </div>
+
+    <section class="data-table-section">
+      <h2>Alle Wirkstoffe</h2>
+      <div class="table-controls">
+        <input type="search" id="search-wirkstoff" placeholder="Wirkstoff suchen..." class="search-input" />
+        <select id="filter-kategorie" class="filter-select">
+          <option value="">Alle Kategorien</option>
+        </select>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table" id="wirkstoffe-table">
+          <thead>
+            <tr>
+              <th>Wirknr</th>
+              <th>Wirkstoffname</th>
+              <th>Kategorie</th>
+              <th>Genehmigt</th>
+              <th>Produkte</th>
+            </tr>
+          </thead>
+          <tbody id="wirkstoffe-tbody">
+            <tr><td colspan="5" class="loading-row">Daten werden geladen...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</BaseLayout>
+
+<script>
+  import * as echarts from 'echarts';
+  import { initDatabase, query } from '../../scripts/db';
+  import { getWirkstoffeNachKategorie, getTopWirkstoffe } from '../../scripts/charts/queries';
+  import { psmTheme, getPieChartOptions, getBarChartOptions } from '../../scripts/charts/theme';
+
+  echarts.registerTheme('psm', psmTheme);
+
+  interface WirkstoffRow {
+    wirknr: string;
+    wirkstoffname: string;
+    kategorie: string | null;
+    genehmigt: string | null;
+    produkte: number;
+  }
+
+  let allWirkstoffe: WirkstoffRow[] = [];
+
+  function hideLoading(chartId: string) {
+    const loading = document.getElementById(`${chartId}-loading`);
+    if (loading) loading.classList.add('hidden');
+  }
+
+  async function init() {
+    await initDatabase();
+
+    // Charts laden
+    await Promise.all([
+      loadKategorienChart(),
+      loadTopWirkstoffeChart()
+    ]);
+
+    // Tabelle laden
+    await loadWirkstoffeTable();
+  }
+
+  async function loadKategorienChart() {
+    const data = await getWirkstoffeNachKategorie();
+    
+    const chartEl = document.getElementById('chart-kategorien');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getPieChartOptions(
+      data.map(d => ({ name: d.kategorie, value: d.anzahl })),
+      ''
+    ));
+    
+    hideLoading('chart-kategorien');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadTopWirkstoffeChart() {
+    const data = await getTopWirkstoffe(20);
+    
+    const chartEl = document.getElementById('chart-top-wirkstoffe');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getBarChartOptions(
+      data.map(d => d.wirkstoffname.length > 30 ? d.wirkstoffname.slice(0, 30) + '...' : d.wirkstoffname),
+      data.map(d => d.anzahl_produkte),
+      '',
+      true
+    ));
+    
+    hideLoading('chart-top-wirkstoffe');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadWirkstoffeTable() {
+    allWirkstoffe = await query<WirkstoffRow>(`
+      SELECT 
+        w.wirknr,
+        w.wirkstoffname,
+        w.kategorie,
+        w.genehmigt,
+        COUNT(DISTINCT g.kennr) as produkte
+      FROM bvl_wirkstoff w
+      LEFT JOIN bvl_wirkstoff_gehalt g ON w.wirknr = g.wirknr
+      GROUP BY w.wirknr
+      ORDER BY produkte DESC
+    `);
+
+    // Kategorien für Filter
+    const kategorien = [...new Set(allWirkstoffe.map(w => w.kategorie).filter(Boolean))];
+    const filterEl = document.getElementById('filter-kategorie') as HTMLSelectElement;
+    kategorien.forEach(k => {
+      const option = document.createElement('option');
+      option.value = k as string;
+      option.textContent = k as string;
+      filterEl.appendChild(option);
+    });
+
+    renderTable(allWirkstoffe);
+
+    // Filter-Events
+    document.getElementById('search-wirkstoff')?.addEventListener('input', filterTable);
+    document.getElementById('filter-kategorie')?.addEventListener('change', filterTable);
+  }
+
+  function filterTable() {
+    const searchTerm = (document.getElementById('search-wirkstoff') as HTMLInputElement)?.value.toLowerCase() || '';
+    const kategorie = (document.getElementById('filter-kategorie') as HTMLSelectElement)?.value || '';
+
+    const filtered = allWirkstoffe.filter(w => {
+      const matchSearch = !searchTerm || 
+        w.wirkstoffname.toLowerCase().includes(searchTerm) ||
+        w.wirknr.toLowerCase().includes(searchTerm);
+      const matchKategorie = !kategorie || w.kategorie === kategorie;
+      return matchSearch && matchKategorie;
+    });
+
+    renderTable(filtered);
+  }
+
+  function renderTable(data: WirkstoffRow[]) {
+    const tbody = document.getElementById('wirkstoffe-tbody');
+    if (!tbody) return;
+
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="loading-row">Keine Ergebnisse</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = data.slice(0, 100).map(w => `
+      <tr>
+        <td><code>${w.wirknr}</code></td>
+        <td>${w.wirkstoffname}</td>
+        <td>${w.kategorie || '-'}</td>
+        <td>${w.genehmigt || '-'}</td>
+        <td>${w.produkte}</td>
+      </tr>
+    `).join('');
+
+    if (data.length > 100) {
+      tbody.innerHTML += `<tr><td colspan="5" class="info-row">... und ${data.length - 100} weitere</td></tr>`;
+    }
+  }
+
+  init();
+</script>
+
+<style>
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+  }
+
+  .page-header h1 {
+    font-size: 1.5rem;
+    margin: 0;
+  }
+
+  .page-header p {
+    color: var(--text-muted);
+    margin: var(--sp-2) 0 0 0;
+  }
+
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: var(--sp-4);
+  }
+
+  .data-table-section {
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+  }
+
+  .data-table-section h2 {
+    font-size: 1.1rem;
+    margin: 0 0 var(--sp-4) 0;
+  }
+
+  .table-controls {
+    display: flex;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+    flex-wrap: wrap;
+  }
+
+  .search-input,
+  .filter-select {
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-2);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+
+  .search-input {
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .search-input:focus,
+  .filter-select:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: var(--sp-2) var(--sp-3);
+    text-align: left;
+    border-bottom: 1px solid var(--border-1);
+  }
+
+  .data-table th {
+    background: var(--surface-2);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .data-table tbody tr:hover {
+    background: var(--surface-2);
+  }
+
+  .data-table code {
+    background: var(--surface-3);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    font-size: 0.8rem;
+  }
+
+  .loading-row,
+  .info-row {
+    text-align: center;
+    color: var(--text-dim);
+    padding: var(--sp-6) !important;
+  }
+</style>

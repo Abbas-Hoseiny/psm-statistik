@@ -1,0 +1,261 @@
+---
+/**
+ * Timeline / Zulassungs-Statistiken
+ */
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import ChartContainer from '../../components/ChartContainer.astro';
+---
+
+<BaseLayout title="Timeline">
+  <div class="page">
+    <header class="page-header">
+      <h1>📅 Zulassungs-Timeline</h1>
+      <p>Zeitliche Entwicklung der Pflanzenschutzmittel-Zulassungen</p>
+    </header>
+
+    <div class="charts-stack">
+      <ChartContainer 
+        id="chart-zulassungen" 
+        title="Neue Zulassungen pro Jahr"
+        height="400px"
+      />
+      
+      <ChartContainer 
+        id="chart-ablauf" 
+        title="Zulassungsende in den nächsten Jahren"
+        height="350px"
+      />
+
+      <ChartContainer 
+        id="chart-kumulativ" 
+        title="Kumulative Entwicklung (aktive Produkte)"
+        height="400px"
+      />
+    </div>
+  </div>
+</BaseLayout>
+
+<script>
+  import * as echarts from 'echarts';
+  import { initDatabase, query } from '../../scripts/db';
+  import { psmTheme, CHART_COLORS, getLineChartOptions, getBarChartOptions } from '../../scripts/charts/theme';
+
+  echarts.registerTheme('psm', psmTheme);
+
+  function hideLoading(chartId: string) {
+    const loading = document.getElementById(`${chartId}-loading`);
+    if (loading) loading.classList.add('hidden');
+  }
+
+  async function init() {
+    await initDatabase();
+
+    await Promise.all([
+      loadZulassungenChart(),
+      loadAblaufChart(),
+      loadKumulativChart()
+    ]);
+  }
+
+  async function loadZulassungenChart() {
+    const data = await query<{ jahr: string; anzahl: number }>(`
+      SELECT 
+        strftime('%Y', zul_erstmalig_am) as jahr,
+        COUNT(*) as anzahl
+      FROM bvl_mittel
+      WHERE zul_erstmalig_am IS NOT NULL
+        AND zul_erstmalig_am != ''
+        AND strftime('%Y', zul_erstmalig_am) >= '2000'
+      GROUP BY jahr
+      ORDER BY jahr ASC
+    `);
+    
+    const chartEl = document.getElementById('chart-zulassungen');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getLineChartOptions(
+      data.map(d => d.jahr),
+      data.map(d => d.anzahl),
+      ''
+    ));
+    
+    hideLoading('chart-zulassungen');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadAblaufChart() {
+    const data = await query<{ jahr: string; anzahl: number }>(`
+      SELECT 
+        strftime('%Y', zul_ende) as jahr,
+        COUNT(*) as anzahl
+      FROM bvl_mittel
+      WHERE zul_ende IS NOT NULL
+        AND zul_ende != ''
+        AND zul_ende >= date('now')
+        AND strftime('%Y', zul_ende) <= strftime('%Y', date('now', '+10 years'))
+      GROUP BY jahr
+      ORDER BY jahr ASC
+    `);
+    
+    const chartEl = document.getElementById('chart-ablauf');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption({
+      ...getBarChartOptions(
+        data.map(d => d.jahr),
+        data.map(d => d.anzahl),
+        '',
+        false
+      ),
+      series: [{
+        type: 'bar',
+        data: data.map((d, i) => ({
+          value: d.anzahl,
+          itemStyle: { 
+            color: d.jahr === new Date().getFullYear().toString() 
+              ? CHART_COLORS[3]  // Rot für aktuelles Jahr
+              : CHART_COLORS[2], // Amber für Zukunft
+            borderRadius: [4, 4, 0, 0]
+          }
+        }))
+      }]
+    });
+    
+    hideLoading('chart-ablauf');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadKumulativChart() {
+    // Aktive Produkte pro Jahr (kumulativ)
+    const data = await query<{ jahr: string; neu: number; abgelaufen: number }>(`
+      WITH jahre AS (
+        SELECT DISTINCT strftime('%Y', zul_erstmalig_am) as jahr
+        FROM bvl_mittel
+        WHERE zul_erstmalig_am IS NOT NULL
+          AND strftime('%Y', zul_erstmalig_am) >= '2000'
+        UNION
+        SELECT DISTINCT strftime('%Y', zul_ende) as jahr
+        FROM bvl_mittel
+        WHERE zul_ende IS NOT NULL
+          AND strftime('%Y', zul_ende) >= '2000'
+      )
+      SELECT 
+        j.jahr,
+        (SELECT COUNT(*) FROM bvl_mittel 
+         WHERE strftime('%Y', zul_erstmalig_am) = j.jahr) as neu,
+        (SELECT COUNT(*) FROM bvl_mittel 
+         WHERE strftime('%Y', zul_ende) = j.jahr) as abgelaufen
+      FROM jahre j
+      WHERE j.jahr IS NOT NULL
+      ORDER BY j.jahr ASC
+    `);
+    
+    // Kumulativ berechnen
+    let aktiv = 0;
+    const kumulativ = data.map(d => {
+      aktiv = aktiv + d.neu - d.abgelaufen;
+      return { jahr: d.jahr, aktiv: Math.max(0, aktiv), neu: d.neu, abgelaufen: d.abgelaufen };
+    });
+    
+    const chartEl = document.getElementById('chart-kumulativ');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(22, 44, 62, 0.95)',
+        borderColor: '#2a3f52',
+        textStyle: { color: '#e6f0f6' }
+      },
+      legend: {
+        data: ['Aktive Produkte', 'Neue Zulassungen', 'Abgelaufen'],
+        textStyle: { color: '#a6b5c2' }
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '15%',
+        containLabel: true
+      },
+      xAxis: {
+        type: 'category',
+        data: kumulativ.map(d => d.jahr),
+        axisLabel: { color: '#a6b5c2' },
+        axisLine: { lineStyle: { color: '#2a3f52' } }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: '#a6b5c2' },
+        splitLine: { lineStyle: { color: '#1b3448' } }
+      },
+      dataZoom: [
+        { type: 'inside', start: 0, end: 100 },
+        { type: 'slider', start: 0, end: 100 }
+      ],
+      series: [
+        {
+          name: 'Aktive Produkte',
+          type: 'line',
+          data: kumulativ.map(d => d.aktiv),
+          smooth: true,
+          lineStyle: { width: 3, color: CHART_COLORS[0] },
+          itemStyle: { color: CHART_COLORS[0] },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(34, 197, 94, 0.3)' },
+                { offset: 1, color: 'rgba(34, 197, 94, 0.05)' }
+              ]
+            }
+          }
+        },
+        {
+          name: 'Neue Zulassungen',
+          type: 'bar',
+          data: kumulativ.map(d => d.neu),
+          itemStyle: { color: CHART_COLORS[1], opacity: 0.7 }
+        },
+        {
+          name: 'Abgelaufen',
+          type: 'bar',
+          data: kumulativ.map(d => -d.abgelaufen),
+          itemStyle: { color: CHART_COLORS[3], opacity: 0.7 }
+        }
+      ]
+    });
+    
+    hideLoading('chart-kumulativ');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  init();
+</script>
+
+<style>
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+  }
+
+  .page-header h1 {
+    font-size: 1.5rem;
+    margin: 0;
+  }
+
+  .page-header p {
+    color: var(--text-muted);
+    margin: var(--sp-2) 0 0 0;
+  }
+
+  .charts-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+  }
+</style>

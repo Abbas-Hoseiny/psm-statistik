@@ -1,0 +1,391 @@
+---
+/**
+ * PSM Statistik Dashboard - Hauptseite
+ * Übersicht mit Kennzahlen und wichtigsten Diagrammen
+ */
+import BaseLayout from '../layouts/BaseLayout.astro';
+import StatCard from '../components/StatCard.astro';
+import ChartContainer from '../components/ChartContainer.astro';
+---
+
+<BaseLayout title="Dashboard">
+  <div class="dashboard">
+    <!-- Header mit Ladeindikator -->
+    <div class="dashboard-header">
+      <div>
+        <h1>PSM Statistik Dashboard</h1>
+        <p class="subtitle">Pflanzenschutzmittel-Daten aus der BVL-Datenbank</p>
+      </div>
+      <div class="db-status" id="db-status">
+        <span class="status-dot"></span>
+        <span class="status-text">Verbinde...</span>
+      </div>
+    </div>
+
+    <!-- Kennzahlen-Grid -->
+    <section class="stats-grid">
+      <StatCard 
+        title="Pflanzenschutzmittel" 
+        value="..." 
+        icon="🧪" 
+        color="primary" 
+      />
+      <StatCard 
+        title="Wirkstoffe" 
+        value="..." 
+        icon="⚗️" 
+        color="info" 
+      />
+      <StatCard 
+        title="Anwendungsgebiete" 
+        value="..." 
+        icon="🌾" 
+        color="warning" 
+      />
+      <StatCard 
+        title="Kulturen" 
+        value="..." 
+        icon="🌱" 
+        color="primary" 
+      />
+      <StatCard 
+        title="Schaderreger" 
+        value="..." 
+        icon="🐛" 
+        color="danger" 
+      />
+      <StatCard 
+        title="Datenstand" 
+        value="..." 
+        icon="📅" 
+        color="info" 
+      />
+    </section>
+
+    <!-- Charts Grid -->
+    <section class="charts-grid">
+      <ChartContainer 
+        id="chart-wirkstoffe" 
+        title="Wirkstoffe nach Kategorie" 
+        height="350px"
+      />
+      <ChartContainer 
+        id="chart-kulturen" 
+        title="Top 15 Kulturen" 
+        height="350px"
+      />
+      <ChartContainer 
+        id="chart-timeline" 
+        title="Zulassungen pro Jahr" 
+        height="350px"
+        class="chart-wide"
+      />
+      <ChartContainer 
+        id="chart-anwendungsbereiche" 
+        title="Anwendungsbereiche" 
+        height="350px"
+      />
+    </section>
+
+    <!-- Info-Box -->
+    <aside class="info-box">
+      <h3>ℹ️ Über diese Daten</h3>
+      <p>
+        Die Daten stammen aus der offiziellen 
+        <a href="https://www.bvl.bund.de/DE/Arbeitsbereiche/04_Pflanzenschutzmittel/psm_node.html" target="_blank">
+          BVL Pflanzenschutzmittel-Datenbank
+        </a>
+        und werden automatisch alle 2 Tage aktualisiert.
+      </p>
+      <p class="data-source">
+        Quelle: <code>pflanzenschutz-db</code> Repository
+      </p>
+    </aside>
+  </div>
+</BaseLayout>
+
+<script>
+  import * as echarts from 'echarts';
+  import { initDatabase } from '../scripts/db';
+  import { 
+    getOverviewStats,
+    getWirkstoffeNachKategorie,
+    getTopKulturen,
+    getZulassungenProJahr,
+    getAnwendungsbereiche
+  } from '../scripts/charts/queries';
+  import { 
+    psmTheme,
+    getPieChartOptions,
+    getBarChartOptions,
+    getLineChartOptions
+  } from '../scripts/charts/theme';
+
+  // Theme registrieren
+  echarts.registerTheme('psm', psmTheme);
+
+  // Status-Anzeige
+  const statusEl = document.getElementById('db-status');
+  const statusDot = statusEl?.querySelector('.status-dot') as HTMLElement;
+  const statusText = statusEl?.querySelector('.status-text') as HTMLElement;
+
+  function setStatus(status: 'loading' | 'connected' | 'error', message: string) {
+    if (!statusDot || !statusText) return;
+    
+    statusDot.className = 'status-dot ' + status;
+    statusText.textContent = message;
+  }
+
+  // Loading-State für Charts verstecken
+  function hideLoading(chartId: string) {
+    const loading = document.getElementById(`${chartId}-loading`);
+    if (loading) loading.classList.add('hidden');
+  }
+
+  // Haupt-Initialisierung
+  async function init() {
+    try {
+      setStatus('loading', 'Lade Datenbank...');
+      
+      // Datenbank initialisieren
+      await initDatabase();
+      
+      setStatus('connected', 'Verbunden');
+
+      // Statistiken laden
+      const stats = await getOverviewStats();
+      
+      // Kennzahlen aktualisieren
+      updateStatCards(stats);
+
+      // Charts laden (parallel)
+      await Promise.all([
+        loadWirkstoffeChart(),
+        loadKulturenChart(),
+        loadTimelineChart(),
+        loadAnwendungsbereicheChart()
+      ]);
+
+    } catch (error) {
+      console.error('Initialisierung fehlgeschlagen:', error);
+      setStatus('error', 'Fehler beim Laden');
+    }
+  }
+
+  function updateStatCards(stats: Awaited<ReturnType<typeof getOverviewStats>>) {
+    const updates: Record<string, string | number> = {
+      'pflanzenschutzmittel': stats.totalMittel.toLocaleString('de-DE'),
+      'wirkstoffe': stats.totalWirkstoffe.toLocaleString('de-DE'),
+      'anwendungsgebiete': stats.totalAwg.toLocaleString('de-DE'),
+      'kulturen': stats.totalKulturen.toLocaleString('de-DE'),
+      'schaderreger': stats.totalSchadorg.toLocaleString('de-DE'),
+      'datenstand': stats.lastUpdate
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      const el = document.querySelector(`[data-stat="${key}"]`);
+      if (el) el.textContent = String(value);
+    }
+  }
+
+  async function loadWirkstoffeChart() {
+    const data = await getWirkstoffeNachKategorie();
+    
+    const chartEl = document.getElementById('chart-wirkstoffe');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getPieChartOptions(
+      data.map(d => ({ name: d.kategorie, value: d.anzahl })),
+      ''
+    ));
+    
+    hideLoading('chart-wirkstoffe');
+    
+    // Responsive
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadKulturenChart() {
+    const data = await getTopKulturen(15);
+    
+    const chartEl = document.getElementById('chart-kulturen');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getBarChartOptions(
+      data.map(d => d.kultur.length > 25 ? d.kultur.slice(0, 25) + '...' : d.kultur),
+      data.map(d => d.anzahl_awg),
+      '',
+      true // horizontal
+    ));
+    
+    hideLoading('chart-kulturen');
+    
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadTimelineChart() {
+    const data = await getZulassungenProJahr();
+    
+    const chartEl = document.getElementById('chart-timeline');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getLineChartOptions(
+      data.map(d => d.jahr),
+      data.map(d => d.anzahl),
+      ''
+    ));
+    
+    hideLoading('chart-timeline');
+    
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadAnwendungsbereicheChart() {
+    const data = await getAnwendungsbereiche();
+    
+    const chartEl = document.getElementById('chart-anwendungsbereiche');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    chart.setOption(getPieChartOptions(
+      data.map(d => ({ name: d.anwendungsbereich, value: d.anzahl })),
+      ''
+    ));
+    
+    hideLoading('chart-anwendungsbereiche');
+    
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  // Start
+  init();
+</script>
+
+<style>
+  .dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+  }
+
+  .dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: var(--sp-4);
+  }
+
+  .dashboard-header h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .subtitle {
+    color: var(--text-muted);
+    margin: var(--sp-1) 0 0 0;
+    font-size: 0.9rem;
+  }
+
+  .db-status {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-md);
+    font-size: 0.85rem;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--chart-3);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .status-dot.connected {
+    background: var(--chart-1);
+    animation: none;
+  }
+
+  .status-dot.error {
+    background: var(--chart-4);
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .status-text {
+    color: var(--text-muted);
+  }
+
+  /* Stats Grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--sp-4);
+  }
+
+  /* Charts Grid */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--sp-4);
+  }
+
+  .chart-wide {
+    grid-column: span 2;
+  }
+
+  @media (max-width: 900px) {
+    .charts-grid {
+      grid-template-columns: 1fr;
+    }
+    
+    .chart-wide {
+      grid-column: span 1;
+    }
+  }
+
+  /* Info Box */
+  .info-box {
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+  }
+
+  .info-box h3 {
+    font-size: 0.95rem;
+    margin: 0 0 var(--sp-2) 0;
+    color: var(--text);
+  }
+
+  .info-box p {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin: var(--sp-2) 0;
+    line-height: 1.6;
+  }
+
+  .info-box a {
+    color: var(--primary);
+  }
+
+  .data-source code {
+    background: var(--surface-2);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    font-size: 0.8rem;
+  }
+</style>

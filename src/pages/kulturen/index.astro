@@ -1,0 +1,726 @@
+---
+/**
+ * Kulturen-Statistiken - mit deutschen Namen und Zulassungsdaten
+ */
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import ChartContainer from '../../components/ChartContainer.astro';
+import StatCard from '../../components/StatCard.astro';
+---
+
+<BaseLayout title="Kulturen">
+  <div class="page">
+    <header class="page-header">
+      <h1>🌱 Kultur-Statistiken</h1>
+      <p>Welche Kulturen haben die meisten zugelassenen Pflanzenschutzmittel?</p>
+    </header>
+
+    <!-- Übersichts-Karten -->
+    <div class="stats-row" id="kultur-stats">
+      <StatCard id="stat-kulturen" title="Kulturen gesamt" value="..." icon="🌾" />
+      <StatCard id="stat-awg" title="Anwendungsgebiete" value="..." icon="📋" color="info" />
+      <StatCard id="stat-top-kultur" title="Top Kultur" value="..." icon="🏆" color="warning" />
+      <StatCard id="stat-produkte-pro-kultur" title="⌀ Produkte/Kultur" value="..." icon="📊" color="danger" />
+    </div>
+
+    <!-- Haupt-Chart: Top Kulturen nach Zulassungen -->
+    <div class="charts-grid">
+      <ChartContainer 
+        id="chart-kulturen-zulassungen"
+        title="Top 25 Kulturen nach Anzahl zugelassener Mittel"
+        height="600px"
+        class="chart-full"
+      />
+    </div>
+
+    <!-- Zweiter Chart: Kultur-Gruppen -->
+    <div class="charts-row">
+      <ChartContainer 
+        id="chart-kultur-gruppen"
+        title="Verteilung nach Kultur-Gruppen"
+        height="400px"
+      />
+      <ChartContainer 
+        id="chart-kultur-trend"
+        title="Anwendungsgebiete nach Kultur-Kategorie"
+        height="400px"
+      />
+    </div>
+
+    <!-- Tabelle mit Suche und Filter -->
+    <section class="data-table-section">
+      <div class="table-header">
+        <h2>Alle Kulturen im Detail</h2>
+        <div class="table-info" id="table-info">Lade Daten...</div>
+      </div>
+      
+      <div class="table-controls">
+        <input type="search" id="search-kultur" placeholder="Kultur suchen (z.B. Weizen, Apfel, Kartoffel)..." class="search-input" />
+        <select id="filter-gruppe" class="filter-select">
+          <option value="">Alle Gruppen</option>
+        </select>
+        <select id="sort-by" class="filter-select">
+          <option value="zulassungen">Nach Zulassungen</option>
+          <option value="awg">Nach Anwendungsgebieten</option>
+          <option value="name">Nach Name (A-Z)</option>
+        </select>
+      </div>
+      
+      <div class="table-wrapper">
+        <table class="data-table" id="kulturen-table">
+          <thead>
+            <tr>
+              <th class="col-rank">#</th>
+              <th class="col-kultur">Kultur</th>
+              <th class="col-gruppe">Gruppe</th>
+              <th class="col-awg">Anwendungsgebiete</th>
+              <th class="col-mittel">Zugelassene Mittel</th>
+              <th class="col-anteil">Anteil</th>
+            </tr>
+          </thead>
+          <tbody id="kulturen-tbody">
+            <tr><td colspan="6" class="loading-row">Daten werden geladen...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</BaseLayout>
+
+<script>
+  import * as echarts from 'echarts';
+  import { initDatabase, query } from '../../scripts/db';
+  import { psmTheme, CHART_COLORS } from '../../scripts/charts/theme';
+  
+  echarts.registerTheme('psm', psmTheme);
+  
+  interface KulturRow {
+    kultur: string;
+    kultur_gruppe: string | null;
+    awg_count: number;
+    mittel_count: number;
+  }
+
+  interface KulturGruppe {
+    gruppe: string;
+    anzahl: number;
+  }
+
+  let allKulturen: KulturRow[] = [];
+  let kulturGruppen: KulturGruppe[] = [];
+  let totalAwg = 0;
+  let totalMittel = 0;
+
+  function hideLoading(chartId: string) {
+    const loading = document.getElementById(`${chartId}-loading`);
+    if (loading) loading.classList.add('hidden');
+  }
+
+  function updateStatCard(titleSlug: string, value: string | number) {
+    const el = document.querySelector(`[data-stat="${titleSlug}"]`);
+    if (el) {
+      el.textContent = typeof value === 'number' ? value.toLocaleString('de-DE') : value;
+    }
+  }
+
+  async function init() {
+    await initDatabase();
+
+    // Hauptdaten laden: Kulturen mit Anzahl Anwendungsgebiete UND Anzahl einzigartige Mittel
+    allKulturen = await query<KulturRow>(`
+      SELECT 
+        ak.kultur,
+        ak.kultur_gruppe,
+        COUNT(*) as awg_count,
+        COUNT(DISTINCT ak.kennr) as mittel_count
+      FROM bvl_awg_kultur ak
+      GROUP BY ak.kultur, ak.kultur_gruppe
+      ORDER BY mittel_count DESC, awg_count DESC
+    `);
+
+    // Kultur-Gruppen laden
+    kulturGruppen = await query<KulturGruppe>(`
+      SELECT 
+        COALESCE(kultur_gruppe, 'Sonstige') as gruppe,
+        COUNT(*) as anzahl
+      FROM bvl_awg_kultur
+      GROUP BY kultur_gruppe
+      ORDER BY anzahl DESC
+    `);
+
+    // Totals berechnen
+    totalAwg = allKulturen.reduce((sum, k) => sum + k.awg_count, 0);
+    totalMittel = allKulturen.reduce((sum, k) => sum + k.mittel_count, 0);
+
+    // Filter-Dropdown befüllen
+    populateFilterDropdown();
+
+    // Stats aktualisieren
+    updateStatCard('kulturen-gesamt', allKulturen.length);
+    updateStatCard('anwendungsgebiete', totalAwg);
+    if (allKulturen.length > 0) {
+      updateStatCard('top-kultur', allKulturen[0].kultur);
+    }
+    const avgMittelPerKultur = allKulturen.length > 0 
+      ? (totalMittel / allKulturen.length).toFixed(1) 
+      : '0';
+    updateStatCard('⌀-produkte/kultur', avgMittelPerKultur);
+
+    // Charts laden
+    await Promise.all([
+      loadKulturenZulassungenChart(),
+      loadKulturGruppenChart(),
+      loadKulturKategorienChart()
+    ]);
+
+    // Tabelle rendern
+    renderTable(allKulturen);
+
+    // Event-Listener
+    document.getElementById('search-kultur')?.addEventListener('input', filterAndRenderTable);
+    document.getElementById('filter-gruppe')?.addEventListener('change', filterAndRenderTable);
+    document.getElementById('sort-by')?.addEventListener('change', filterAndRenderTable);
+  }
+
+  function populateFilterDropdown() {
+    const select = document.getElementById('filter-gruppe') as HTMLSelectElement;
+    if (!select) return;
+
+    const gruppen = [...new Set(allKulturen.map(k => k.kultur_gruppe || 'Sonstige'))].sort();
+    gruppen.forEach(gruppe => {
+      const option = document.createElement('option');
+      option.value = gruppe;
+      option.textContent = gruppe;
+      select.appendChild(option);
+    });
+  }
+
+  async function loadKulturenZulassungenChart() {
+    const top25 = allKulturen.slice(0, 25);
+    
+    const chartEl = document.getElementById('chart-kulturen-zulassungen');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    
+    chart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any) => {
+          const data = params[0];
+          const kultur = top25.find(k => k.kultur === data.name);
+          if (!kultur) return '';
+          const percentMittel = ((kultur.mittel_count / totalMittel) * 100).toFixed(1);
+          return `
+            <strong>${data.name}</strong><br/>
+            <span style="color: ${CHART_COLORS[0]}">●</span> Zugelassene Mittel: <strong>${kultur.mittel_count.toLocaleString('de-DE')}</strong><br/>
+            <span style="color: ${CHART_COLORS[1]}">●</span> Anwendungsgebiete: ${kultur.awg_count.toLocaleString('de-DE')}<br/>
+            Gruppe: ${kultur.kultur_gruppe || 'k.A.'}<br/>
+            Anteil: ${percentMittel}%
+          `;
+        }
+      },
+      grid: {
+        left: '22%',
+        right: '4%',
+        top: '3%',
+        bottom: '3%'
+      },
+      xAxis: {
+        type: 'value',
+        name: 'Anzahl zugelassene Mittel',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: { color: '#a6b5c2' },
+        splitLine: { lineStyle: { color: '#1b3448' } }
+      },
+      yAxis: {
+        type: 'category',
+        data: top25.map(k => k.kultur).reverse(),
+        axisLabel: { 
+          color: '#a6b5c2',
+          width: 160,
+          overflow: 'truncate',
+          ellipsis: '...',
+          fontSize: 11
+        },
+        axisLine: { lineStyle: { color: '#2a3f52' } }
+      },
+      series: [{
+        name: 'Zugelassene Mittel',
+        type: 'bar',
+        data: top25.map((k, i) => ({
+          value: k.mittel_count,
+          itemStyle: { 
+            color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+              { offset: 0, color: CHART_COLORS[i % CHART_COLORS.length] },
+              { offset: 1, color: CHART_COLORS[(i + 1) % CHART_COLORS.length] }
+            ]),
+            borderRadius: [0, 4, 4, 0]
+          }
+        })).reverse(),
+        emphasis: {
+          itemStyle: {
+            shadowBlur: 10,
+            shadowColor: 'rgba(0,0,0,0.3)'
+          }
+        },
+        label: {
+          show: true,
+          position: 'right',
+          color: '#a6b5c2',
+          fontSize: 10,
+          formatter: '{c}'
+        }
+      }]
+    });
+    
+    hideLoading('chart-kulturen-zulassungen');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadKulturGruppenChart() {
+    const chartEl = document.getElementById('chart-kultur-gruppen');
+    if (!chartEl) return;
+
+    const chart = echarts.init(chartEl, 'psm');
+    
+    // Top 10 Gruppen
+    const top10Gruppen = kulturGruppen.slice(0, 10);
+    
+    chart.setOption({
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: any) => {
+          return `<strong>${params.name}</strong><br/>Anwendungen: ${params.value.toLocaleString('de-DE')}<br/>Anteil: ${params.percent.toFixed(1)}%`;
+        }
+      },
+      legend: {
+        type: 'scroll',
+        orient: 'vertical',
+        right: 10,
+        top: 20,
+        bottom: 20,
+        textStyle: { color: '#a6b5c2', fontSize: 10 }
+      },
+      series: [{
+        name: 'Kultur-Gruppen',
+        type: 'pie',
+        radius: ['40%', '70%'],
+        center: ['35%', '50%'],
+        avoidLabelOverlap: false,
+        itemStyle: {
+          borderRadius: 8,
+          borderColor: '#0a1929',
+          borderWidth: 2
+        },
+        label: { show: false },
+        emphasis: {
+          label: {
+            show: true,
+            fontSize: 12,
+            fontWeight: 'bold',
+            color: '#fff'
+          }
+        },
+        labelLine: { show: false },
+        data: top10Gruppen.map((g, i) => ({
+          name: g.gruppe,
+          value: g.anzahl,
+          itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] }
+        }))
+      }]
+    });
+    
+    hideLoading('chart-kultur-gruppen');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function loadKulturKategorienChart() {
+    const chartEl = document.getElementById('chart-kultur-trend');
+    if (!chartEl) return;
+
+    // Kategorisiere Kulturen
+    const kategorien: Record<string, number> = {
+      'Getreide': 0,
+      'Obst': 0,
+      'Gemüse': 0,
+      'Zierpflanzen': 0,
+      'Ackerbau': 0,
+      'Sonderkulturen': 0
+    };
+
+    allKulturen.forEach(k => {
+      const gruppe = (k.kultur_gruppe || '').toLowerCase();
+      const kultur = k.kultur.toLowerCase();
+      
+      if (gruppe.includes('getreide') || ['weizen', 'gerste', 'roggen', 'hafer', 'mais', 'triticale'].some(g => kultur.includes(g))) {
+        kategorien['Getreide'] += k.awg_count;
+      } else if (gruppe.includes('obst') || gruppe.includes('kern') || gruppe.includes('stein') || gruppe.includes('beeren')) {
+        kategorien['Obst'] += k.awg_count;
+      } else if (gruppe.includes('gemüse') || gruppe.includes('kohl') || gruppe.includes('wurzel') || gruppe.includes('salat')) {
+        kategorien['Gemüse'] += k.awg_count;
+      } else if (gruppe.includes('zier') || gruppe.includes('blume')) {
+        kategorien['Zierpflanzen'] += k.awg_count;
+      } else if (['raps', 'rübe', 'kartoffel', 'sonnenblume', 'soja', 'erbse', 'bohne'].some(g => kultur.includes(g))) {
+        kategorien['Ackerbau'] += k.awg_count;
+      } else {
+        kategorien['Sonderkulturen'] += k.awg_count;
+      }
+    });
+
+    const chart = echarts.init(chartEl, 'psm');
+    
+    const sortedKategorien = Object.entries(kategorien)
+      .sort((a, b) => b[1] - a[1]);
+    
+    chart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' }
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '15%',
+        top: '10%',
+        containLabel: true
+      },
+      xAxis: {
+        type: 'category',
+        data: sortedKategorien.map(k => k[0]),
+        axisLabel: { 
+          color: '#a6b5c2',
+          rotate: 30
+        },
+        axisLine: { lineStyle: { color: '#2a3f52' } }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Anwendungsgebiete',
+        axisLabel: { color: '#a6b5c2' },
+        splitLine: { lineStyle: { color: '#1b3448' } }
+      },
+      series: [{
+        type: 'bar',
+        data: sortedKategorien.map((k, i) => ({
+          value: k[1],
+          itemStyle: { 
+            color: CHART_COLORS[i % CHART_COLORS.length],
+            borderRadius: [4, 4, 0, 0]
+          }
+        })),
+        label: {
+          show: true,
+          position: 'top',
+          color: '#a6b5c2',
+          fontSize: 10,
+          formatter: (params: any) => params.value.toLocaleString('de-DE')
+        }
+      }]
+    });
+    
+    hideLoading('chart-kultur-trend');
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  function filterAndRenderTable() {
+    const searchTerm = (document.getElementById('search-kultur') as HTMLInputElement)?.value.toLowerCase() || '';
+    const gruppeFilter = (document.getElementById('filter-gruppe') as HTMLSelectElement)?.value || '';
+    const sortBy = (document.getElementById('sort-by') as HTMLSelectElement)?.value || 'zulassungen';
+
+    let filtered = allKulturen;
+
+    // Search-Filter
+    if (searchTerm) {
+      filtered = filtered.filter(k => 
+        k.kultur.toLowerCase().includes(searchTerm) ||
+        (k.kultur_gruppe || '').toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Gruppen-Filter
+    if (gruppeFilter) {
+      filtered = filtered.filter(k => (k.kultur_gruppe || 'Sonstige') === gruppeFilter);
+    }
+
+    // Sortierung
+    filtered = [...filtered].sort((a, b) => {
+      switch (sortBy) {
+        case 'awg': return b.awg_count - a.awg_count;
+        case 'name': return a.kultur.localeCompare(b.kultur, 'de');
+        default: return b.mittel_count - a.mittel_count;
+      }
+    });
+
+    renderTable(filtered);
+  }
+
+  function renderTable(data: KulturRow[]) {
+    const tbody = document.getElementById('kulturen-tbody');
+    const info = document.getElementById('table-info');
+    if (!tbody) return;
+
+    if (info) {
+      info.textContent = `${data.length.toLocaleString('de-DE')} Kulturen`;
+    }
+
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Keine Ergebnisse gefunden</td></tr>';
+      return;
+    }
+
+    const maxMittel = Math.max(...data.map(k => k.mittel_count));
+
+    tbody.innerHTML = data.slice(0, 150).map((k, i) => {
+      const percent = ((k.mittel_count / maxMittel) * 100).toFixed(1);
+      const anteilGesamt = ((k.mittel_count / totalMittel) * 100).toFixed(2);
+      return `
+        <tr>
+          <td class="col-rank">${i + 1}</td>
+          <td class="col-kultur">
+            <span class="kultur-name">${k.kultur}</span>
+          </td>
+          <td class="col-gruppe">
+            <span class="gruppe-badge">${k.kultur_gruppe || 'Sonstige'}</span>
+          </td>
+          <td class="col-awg">${k.awg_count.toLocaleString('de-DE')}</td>
+          <td class="col-mittel">
+            <div class="mittel-bar">
+              <div class="mittel-fill" style="width: ${percent}%"></div>
+              <span class="mittel-count">${k.mittel_count.toLocaleString('de-DE')}</span>
+            </div>
+          </td>
+          <td class="col-anteil">${anteilGesamt}%</td>
+        </tr>
+      `;
+    }).join('');
+
+    if (data.length > 150) {
+      tbody.innerHTML += `<tr><td colspan="6" class="info-row">... und ${(data.length - 150).toLocaleString('de-DE')} weitere Kulturen</td></tr>`;
+    }
+  }
+
+  init();
+</script>
+
+<style>
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-6);
+  }
+
+  .page-header h1 {
+    font-size: 1.5rem;
+    margin: 0;
+  }
+
+  .page-header p {
+    color: var(--text-muted);
+    margin: var(--sp-2) 0 0 0;
+  }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--sp-4);
+  }
+
+  .charts-grid {
+    display: grid;
+    gap: var(--sp-4);
+  }
+
+  .charts-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: var(--sp-4);
+  }
+
+  .chart-full {
+    width: 100%;
+  }
+
+  .data-table-section {
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+  }
+
+  .table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--sp-4);
+  }
+
+  .table-header h2 {
+    font-size: 1.1rem;
+    margin: 0;
+  }
+
+  .table-info {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .table-controls {
+    display: flex;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+    flex-wrap: wrap;
+  }
+
+  .search-input {
+    flex: 1;
+    min-width: 250px;
+    max-width: 400px;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-2);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+
+  .filter-select {
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-2);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .search-input:focus,
+  .filter-select:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: var(--sp-2) var(--sp-3);
+    text-align: left;
+    border-bottom: 1px solid var(--border-1);
+  }
+
+  .data-table th {
+    background: var(--surface-2);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .data-table tbody tr:hover {
+    background: var(--surface-2);
+  }
+
+  .col-rank {
+    width: 40px;
+    text-align: center;
+    color: var(--text-dim);
+  }
+
+  .col-kultur {
+    min-width: 200px;
+  }
+
+  .kultur-name {
+    font-weight: 500;
+  }
+
+  .col-gruppe {
+    min-width: 140px;
+  }
+
+  .gruppe-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--surface-3);
+    border-radius: var(--r-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .col-awg,
+  .col-anteil {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .col-mittel {
+    min-width: 180px;
+  }
+
+  .mittel-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    background: var(--surface-2);
+    border-radius: var(--r-sm);
+    padding: 2px 8px 2px 0;
+    position: relative;
+  }
+
+  .mittel-fill {
+    height: 24px;
+    background: linear-gradient(90deg, var(--primary), var(--primary-light, #4ade80));
+    border-radius: var(--r-sm);
+    min-width: 4px;
+    opacity: 0.3;
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+
+  .mittel-count {
+    position: relative;
+    z-index: 1;
+    font-weight: 600;
+    padding-left: var(--sp-2);
+  }
+
+  .col-anteil {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .loading-row,
+  .info-row {
+    text-align: center;
+    color: var(--text-dim);
+    padding: var(--sp-6) !important;
+  }
+
+  @media (max-width: 768px) {
+    .charts-row {
+      grid-template-columns: 1fr;
+    }
+    
+    .table-controls {
+      flex-direction: column;
+    }
+    
+    .search-input {
+      max-width: none;
+    }
+  }
+</style>

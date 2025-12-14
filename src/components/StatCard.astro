@@ -1,0 +1,79 @@
+---
+/**
+ * Statistik-Karte Komponente
+ * Zeigt eine einzelne Kennzahl mit Icon
+ */
+interface Props {
+  title: string;
+  value: string | number;
+  icon?: string;
+  color?: 'primary' | 'info' | 'warning' | 'danger';
+}
+
+const { title, value, icon, color = 'primary' } = Astro.props;
+
+const colorClasses = {
+  primary: 'stat-primary',
+  info: 'stat-info',
+  warning: 'stat-warning',
+  danger: 'stat-danger'
+};
+---
+
+<div class={`stat-card ${colorClasses[color]}`}>
+  {icon && <div class="stat-icon">{icon}</div>}
+  <div class="stat-content">
+    <div class="stat-value" data-stat={title.toLowerCase().replace(/\s+/g, '-')}>{value}</div>
+    <div class="stat-title">{title}</div>
+  </div>
+</div>
+
+<style>
+  .stat-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4) var(--sp-6);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-1);
+  }
+
+  .stat-icon {
+    font-size: 2rem;
+    opacity: 0.9;
+  }
+
+  .stat-content {
+    flex: 1;
+  }
+
+  .stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .stat-title {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: var(--sp-1);
+  }
+
+  /* Farbvarianten */
+  .stat-primary .stat-value { color: var(--chart-1); }
+  .stat-info .stat-value { color: var(--chart-2); }
+  .stat-warning .stat-value { color: var(--chart-3); }
+  .stat-danger .stat-value { color: var(--chart-4); }
+
+  .stat-primary { border-left: 3px solid var(--chart-1); }
+  .stat-info { border-left: 3px solid var(--chart-2); }
+  .stat-warning { border-left: 3px solid var(--chart-3); }
+  .stat-danger { border-left: 3px solid var(--chart-4); }
+</style>
