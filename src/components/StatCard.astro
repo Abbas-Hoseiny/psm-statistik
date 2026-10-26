@@ -8,9 +8,12 @@ interface Props {
   value: string | number;
   icon?: string;
   color?: 'primary' | 'info' | 'warning' | 'danger';
+  /** Fester Schlüssel für data-stat; sonst aus dem Titel abgeleitet */
+  statKey?: string;
 }
 
-const { title, value, icon, color = 'primary' } = Astro.props;
+const { title, value, icon, color = 'primary', statKey } = Astro.props;
+const key = statKey ?? title.toLowerCase().replace(/\s+/g, '-');
 
 const colorClasses = {
   primary: 'stat-primary',
@@ -23,7 +26,7 @@ const colorClasses = {
 <div class={`stat-card ${colorClasses[color]}`}>
   {icon && <div class="stat-icon">{icon}</div>}
   <div class="stat-content">
-    <div class="stat-value" data-stat={title.toLowerCase().replace(/\s+/g, '-')}>{value}</div>
+    <div class="stat-value" data-stat={key}>{value}</div>
     <div class="stat-title">{title}</div>
   </div>
 </div>
@@ -58,6 +61,11 @@ const colorClasses = {
     font-size: 1.75rem;
     font-weight: 700;
     line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .stat-content {
+    min-width: 0;
   }
 
   .stat-title {

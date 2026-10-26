@@ -21,7 +21,8 @@ import ChartContainer from '../../components/ChartContainer.astro';
       />
       <ChartContainer 
         id="chart-top-wirkstoffe" 
-        title="Top 20 Wirkstoffe (nach Anzahl Produkte)"
+        title="Top 20 Wirkstoffe nach zugelassenen Mitteln"
+        note="Anzahl der heute zugelassenen Mittel, die den Wirkstoff enthalten."
         height="500px"
       />
     </div>
@@ -39,10 +40,10 @@ import ChartContainer from '../../components/ChartContainer.astro';
           <thead>
             <tr>
               <th>Wirknr</th>
-              <th>Wirkstoffname</th>
+              <th><span class="lbl-long">Wirkstoffname</span><span class="lbl-short">Wirkstoff</span></th>
               <th>Kategorie</th>
               <th>Genehmigt</th>
-              <th>Produkte</th>
+              <th><span class="lbl-long">Zugelassene Mittel</span><span class="lbl-short">Mittel</span></th>
             </tr>
           </thead>
           <tbody id="wirkstoffe-tbody">
@@ -56,19 +57,11 @@ import ChartContainer from '../../components/ChartContainer.astro';
 
 <script>
   import * as echarts from 'echarts';
-  import { initDatabase, query } from '../../scripts/db';
-  import { getWirkstoffeNachKategorie, getTopWirkstoffe } from '../../scripts/charts/queries';
+  import { initDatabase, showLoadError, esc } from '../../scripts/db';
+  import { getWirkstoffeNachKategorie, getTopWirkstoffe, getWirkstoffTabelle, type WirkstoffRow } from '../../scripts/charts/queries';
   import { psmTheme, getPieChartOptions, getBarChartOptions } from '../../scripts/charts/theme';
 
   echarts.registerTheme('psm', psmTheme);
-
-  interface WirkstoffRow {
-    wirknr: string;
-    wirkstoffname: string;
-    kategorie: string | null;
-    genehmigt: string | null;
-    produkte: number;
-  }
 
   let allWirkstoffe: WirkstoffRow[] = [];
 
@@ -125,18 +118,7 @@ import ChartContainer from '../../components/ChartContainer.astro';
   }
 
   async function loadWirkstoffeTable() {
-    allWirkstoffe = await query<WirkstoffRow>(`
-      SELECT 
-        w.wirknr,
-        w.wirkstoffname,
-        w.kategorie,
-        w.genehmigt,
-        COUNT(DISTINCT g.kennr) as produkte
-      FROM bvl_wirkstoff w
-      LEFT JOIN bvl_wirkstoff_gehalt g ON w.wirknr = g.wirknr
-      GROUP BY w.wirknr
-      ORDER BY produkte DESC
-    `);
+    allWirkstoffe = await getWirkstoffTabelle();
 
     // Kategorien für Filter
     const kategorien = [...new Set(allWirkstoffe.map(w => w.kategorie).filter(Boolean))];
@@ -179,13 +161,16 @@ import ChartContainer from '../../components/ChartContainer.astro';
       return;
     }
 
+    const genehmigtText = (value: string | null) =>
+      value === 'J' ? 'ja' : value === 'N' ? 'nein' : value || '-';
+
     tbody.innerHTML = data.slice(0, 100).map(w => `
       <tr>
-        <td><code>${w.wirknr}</code></td>
-        <td>${w.wirkstoffname}</td>
-        <td>${w.kategorie || '-'}</td>
-        <td>${w.genehmigt || '-'}</td>
-        <td>${w.produkte}</td>
+        <td><code>${esc(w.wirknr)}</code></td>
+        <td>${esc(w.wirkstoffname)}</td>
+        <td>${esc(w.kategorie || '-')}</td>
+        <td>${esc(genehmigtText(w.genehmigt))}</td>
+        <td>${w.produkte.toLocaleString('de-DE')}</td>
       </tr>
     `).join('');
 
@@ -194,7 +179,7 @@ import ChartContainer from '../../components/ChartContainer.astro';
     }
   }
 
-  init();
+  init().catch(showLoadError);
 </script>
 
 <style>
@@ -216,7 +201,7 @@ import ChartContainer from '../../components/ChartContainer.astro';
 
   .charts-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
     gap: var(--sp-4);
   }
 
@@ -270,14 +255,21 @@ import ChartContainer from '../../components/ChartContainer.astro';
     font-size: 0.85rem;
   }
 
-  .data-table th,
-  .data-table td {
+
+
+
+
+</style>
+
+<style is:global>
+  /* Tabellenzeilen entstehen per Skript (innerHTML), daher global, auf diese Tabelle begrenzt. */
+  #wirkstoffe-table th,
+  #wirkstoffe-table td {
     padding: var(--sp-2) var(--sp-3);
     text-align: left;
     border-bottom: 1px solid var(--border-1);
   }
-
-  .data-table th {
+  #wirkstoffe-table th {
     background: var(--surface-2);
     font-weight: 600;
     color: var(--text-muted);
@@ -285,22 +277,30 @@ import ChartContainer from '../../components/ChartContainer.astro';
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
-
-  .data-table tbody tr:hover {
-    background: var(--surface-2);
-  }
-
-  .data-table code {
+  #wirkstoffe-table th:last-child,
+  #wirkstoffe-table td:last-child { text-align: right; }
+  #wirkstoffe-table tbody tr:hover { background: var(--surface-2); }
+  #wirkstoffe-table code {
     background: var(--surface-3);
     padding: 2px 6px;
     border-radius: var(--r-sm);
     font-size: 0.8rem;
   }
+  #wirkstoffe-table .loading-row,
+  #wirkstoffe-table .info-row { text-align: center; color: var(--text-dim); padding: var(--sp-6); }
 
-  .loading-row,
-  .info-row {
-    text-align: center;
-    color: var(--text-dim);
-    padding: var(--sp-6) !important;
+  #wirkstoffe-table .lbl-short { display: none; }
+
+  /* Handy: Wirkstoffnummer und Kategorie aus, Name und Zahlen bleiben sichtbar */
+  @media (max-width: 600px) {
+    #wirkstoffe-table th { text-transform: none; letter-spacing: 0; font-size: 0.75rem; }
+    #wirkstoffe-table .lbl-long { display: none; }
+    #wirkstoffe-table .lbl-short { display: inline; }
+    #wirkstoffe-table th:nth-child(1),
+    #wirkstoffe-table td:nth-child(1):not([colspan]),
+    #wirkstoffe-table th:nth-child(3),
+    #wirkstoffe-table td:nth-child(3) { display: none; }
+    #wirkstoffe-table th,
+    #wirkstoffe-table td { padding: var(--sp-2); }
   }
 </style>

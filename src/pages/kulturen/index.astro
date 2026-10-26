@@ -16,17 +16,17 @@ import StatCard from '../../components/StatCard.astro';
 
     <!-- Übersichts-Karten -->
     <div class="stats-row" id="kultur-stats">
-      <StatCard id="stat-kulturen" title="Kulturen gesamt" value="..." icon="🌾" />
-      <StatCard id="stat-awg" title="Anwendungsgebiete" value="..." icon="📋" color="info" />
-      <StatCard id="stat-top-kultur" title="Top Kultur" value="..." icon="🏆" color="warning" />
-      <StatCard id="stat-produkte-pro-kultur" title="⌀ AWG/Kultur" value="..." icon="📊" color="danger" />
+      <StatCard title="Kulturen & Objekte" statKey="kulturen" value="..." icon="🌾" />
+      <StatCard title="Anwendungsgebiete" statKey="awg" value="..." icon="📋" color="info" />
+      <StatCard title="Top Kultur" statKey="top-kultur" value="..." icon="🏆" color="warning" />
+      <StatCard title="⌀ Anwendungsgebiete je Kultur" statKey="avg" value="..." icon="📊" color="danger" />
     </div>
 
     <!-- Haupt-Chart: Top Kulturen nach Zulassungen -->
     <div class="charts-grid">
       <ChartContainer 
         id="chart-kulturen-zulassungen"
-        title="Top 25 Kulturen nach Anzahl Anwendungsgebiete"
+        title="Top 25 Kulturen nach Anwendungsgebieten"
         height="600px"
         class="chart-full"
       />
@@ -36,12 +36,14 @@ import StatCard from '../../components/StatCard.astro';
     <div class="charts-row">
       <ChartContainer 
         id="chart-kultur-gruppen"
-        title="Verteilung nach Kultur-Gruppen"
+        title="Top 10 Kulturgruppen nach Anwendungsgebieten"
+        note="Eine Kultur kann mehreren Gruppen angehören; je Gruppe zählt jedes Anwendungsgebiet einmal."
         height="400px"
       />
       <ChartContainer 
-        id="chart-kultur-trend"
-        title="Top 10 Kultur-Gruppen"
+        id="chart-kultur-mittel"
+        title="Top 10 Kulturen nach zugelassenen Mitteln"
+        note="Anzahl der heute zugelassenen Mittel mit mindestens einem Anwendungsgebiet für die Kultur."
         height="400px"
       />
     </div>
@@ -71,9 +73,9 @@ import StatCard from '../../components/StatCard.astro';
               <th class="col-rank">#</th>
               <th class="col-kultur">Kultur</th>
               <th class="col-code">EPPO-Code</th>
-              <th class="col-gruppe">Gruppe</th>
-              <th class="col-awg">Anwendungsgebiete</th>
-              <th class="col-anteil">Anteil</th>
+              <th class="col-gruppe">Gruppen</th>
+              <th class="col-awg">Anwendungs&shy;gebiete</th>
+              <th class="col-anteil">Anteil an allen AWG</th>
             </tr>
           </thead>
           <tbody id="kulturen-tbody">
@@ -87,34 +89,26 @@ import StatCard from '../../components/StatCard.astro';
 
 <script>
   import * as echarts from 'echarts';
-  import { initDatabase, query } from '../../scripts/db';
-  import { psmTheme, CHART_COLORS } from '../../scripts/charts/theme';
-  
-  echarts.registerTheme('psm', psmTheme);
-  
-  interface KulturRow {
-    kultur_code: string;
-    kultur_name: string;
-    gruppe: string | null;
-    awg_count: number;
-  }
+  import { initDatabase, queryOne, showLoadError, esc } from '../../scripts/db';
+  import { getKulturenDetail, getKulturGruppen, getMittelJeKultur, type KulturRow } from '../../scripts/charts/queries';
+  import { psmTheme, CHART_COLORS, getBarChartOptions, isNarrow } from '../../scripts/charts/theme';
 
-  interface KulturGruppe {
-    gruppe: string;
-    anzahl: number;
-  }
+  echarts.registerTheme('psm', psmTheme);
+
+  const GRUPPEN_TRENNER = ' · ';
 
   let allKulturen: KulturRow[] = [];
-  let kulturGruppen: KulturGruppe[] = [];
   let totalAwg = 0;
+
+  const gruppenVon = (k: KulturRow) => (k.gruppen ? k.gruppen.split(GRUPPEN_TRENNER) : []);
 
   function hideLoading(chartId: string) {
     const loading = document.getElementById(`${chartId}-loading`);
     if (loading) loading.classList.add('hidden');
   }
 
-  function updateStatCard(titleSlug: string, value: string | number) {
-    const el = document.querySelector(`[data-stat="${titleSlug}"]`);
+  function updateStatCard(key: string, value: string | number) {
+    const el = document.querySelector(`[data-stat="${key}"]`);
     if (el) {
       el.textContent = typeof value === 'number' ? value.toLocaleString('de-DE') : value;
     }
@@ -123,59 +117,37 @@ import StatCard from '../../components/StatCard.astro';
   async function init() {
     await initDatabase();
 
-    // Hauptdaten laden: Kulturen mit deutschen Namen aus bvl_kode (kodeliste 948, sprache DE)
-    allKulturen = await query<KulturRow>(`
-      SELECT 
-        ak.kultur as kultur_code,
-        COALESCE(kd.kodetext, ak.kultur) as kultur_name,
-        kg.gruppe,
-        COUNT(*) as awg_count
-      FROM bvl_awg_kultur ak
-      LEFT JOIN bvl_kode kd ON ak.kultur = kd.kode AND kd.kodeliste = 948 AND kd.sprache = 'DE'
-      LEFT JOIN bvl_kultur_gruppe kg ON ak.kultur = kg.kultur
-      GROUP BY ak.kultur
-      ORDER BY awg_count DESC
-    `);
+    // Kulturen mit deutschen Namen (Kodeliste 948) und ihren Gruppen; ausgenommene Kulturen zählen nicht
+    allKulturen = await getKulturenDetail();
 
-    // Kultur-Gruppen laden
-    kulturGruppen = await query<KulturGruppe>(`
-      SELECT 
-        COALESCE(kg.gruppe, 'Sonstige') as gruppe,
-        COUNT(*) as anzahl
-      FROM bvl_awg_kultur ak
-      LEFT JOIN bvl_kultur_gruppe kg ON ak.kultur = kg.kultur
-      GROUP BY kg.gruppe
-      ORDER BY anzahl DESC
-    `);
+    const awg = await queryOne<{ anzahl: number }>(
+      "SELECT COUNT(DISTINCT awg_id) AS anzahl FROM bvl_awg_kultur WHERE ausgenommen = 'N'"
+    );
+    totalAwg = awg?.anzahl ?? 0;
+    const verknuepfungen = allKulturen.reduce((sum, k) => sum + k.awg_count, 0);
 
-    // Total berechnen
-    totalAwg = allKulturen.reduce((sum, k) => sum + k.awg_count, 0);
-
-    // Filter-Dropdown befüllen
     populateFilterDropdown();
 
-    // Stats aktualisieren
-    updateStatCard('kulturen-gesamt', allKulturen.length);
-    updateStatCard('anwendungsgebiete', totalAwg);
+    updateStatCard('kulturen', allKulturen.length);
+    updateStatCard('awg', totalAwg);
     if (allKulturen.length > 0) {
       updateStatCard('top-kultur', allKulturen[0].kultur_name);
     }
-    const avgAwgPerKultur = allKulturen.length > 0 
-      ? (totalAwg / allKulturen.length).toFixed(1) 
-      : '0';
-    updateStatCard('⌀-awg/kultur', avgAwgPerKultur);
+    updateStatCard(
+      'avg',
+      allKulturen.length > 0
+        ? (verknuepfungen / allKulturen.length).toLocaleString('de-DE', { maximumFractionDigits: 1 })
+        : '0'
+    );
 
-    // Charts laden
     await Promise.all([
-      loadKulturenZulassungenChart(),
+      loadKulturenChart(),
       loadKulturGruppenChart(),
-      loadKulturKategorienChart()
+      loadMittelJeKulturChart()
     ]);
 
-    // Tabelle rendern
     renderTable(allKulturen);
 
-    // Event-Listener
     document.getElementById('search-kultur')?.addEventListener('input', filterAndRenderTable);
     document.getElementById('filter-gruppe')?.addEventListener('change', filterAndRenderTable);
     document.getElementById('sort-by')?.addEventListener('change', filterAndRenderTable);
@@ -185,7 +157,7 @@ import StatCard from '../../components/StatCard.astro';
     const select = document.getElementById('filter-gruppe') as HTMLSelectElement;
     if (!select) return;
 
-    const gruppen = [...new Set(allKulturen.map(k => k.gruppe || 'Sonstige'))].sort();
+    const gruppen = [...new Set(allKulturen.flatMap(gruppenVon))].sort((a, b) => a.localeCompare(b, 'de'));
     gruppen.forEach(gruppe => {
       const option = document.createElement('option');
       option.value = gruppe;
@@ -194,54 +166,53 @@ import StatCard from '../../components/StatCard.astro';
     });
   }
 
-  async function loadKulturenZulassungenChart() {
-    const top25 = allKulturen.slice(0, 25);
-    
+  async function loadKulturenChart() {
+    const top25 = allKulturen.slice(0, 25).reverse();
+    const narrow = isNarrow();
+
     const chartEl = document.getElementById('chart-kulturen-zulassungen');
     if (!chartEl) return;
 
     const chart = echarts.init(chartEl, 'psm');
-    
+
     chart.setOption({
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        confine: true,
         formatter: (params: any) => {
-          const data = params[0];
-          const kultur = top25.find(k => k.kultur_name === data.name);
+          const kultur = top25[params[0]?.dataIndex];
           if (!kultur) return '';
-          const percent = ((kultur.awg_count / totalAwg) * 100).toFixed(1);
+          const percent = totalAwg ? ((kultur.awg_count / totalAwg) * 100).toLocaleString('de-DE', { maximumFractionDigits: 1 }) : '0';
           return `
-            <strong>${data.name}</strong><br/>
-            EPPO-Code: <code>${kultur.kultur_code}</code><br/>
+            <strong>${esc(kultur.kultur_name)}</strong><br/>
+            EPPO-Code: <code>${esc(kultur.kultur_code)}</code><br/>
             <span style="color: ${CHART_COLORS[0]}">●</span> Anwendungsgebiete: <strong>${kultur.awg_count.toLocaleString('de-DE')}</strong><br/>
-            Gruppe: ${kultur.gruppe || 'k.A.'}<br/>
-            Anteil: ${percent}%
+            Anteil an allen Anwendungsgebieten: ${percent} %
           `;
         }
       },
       grid: {
-        left: '25%',
-        right: '4%',
+        left: '3%',
+        right: narrow ? '12%' : '6%',
         top: '3%',
-        bottom: '3%'
+        bottom: '3%',
+        containLabel: true
       },
       xAxis: {
         type: 'value',
-        name: 'Anzahl Anwendungsgebiete',
-        nameLocation: 'middle',
-        nameGap: 30,
-        axisLabel: { color: '#a6b5c2' },
+        splitNumber: narrow ? 3 : undefined,
+        axisLabel: { color: '#a6b5c2', hideOverlap: true, formatter: (v: number) => v.toLocaleString('de-DE') },
         splitLine: { lineStyle: { color: '#1b3448' } }
       },
       yAxis: {
         type: 'category',
-        data: top25.map(k => k.kultur_name).reverse(),
-        axisLabel: { 
+        data: top25.map(k => k.kultur_name),
+        axisLabel: {
           color: '#a6b5c2',
-          width: 180,
+          width: narrow ? 110 : 190,
           overflow: 'truncate',
-          ellipsis: '...',
+          ellipsis: '…',
           fontSize: 11
         },
         axisLine: { lineStyle: { color: '#2a3f52' } }
@@ -251,14 +222,14 @@ import StatCard from '../../components/StatCard.astro';
         type: 'bar',
         data: top25.map((k, i) => ({
           value: k.awg_count,
-          itemStyle: { 
+          itemStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
               { offset: 0, color: CHART_COLORS[i % CHART_COLORS.length] },
               { offset: 1, color: CHART_COLORS[(i + 1) % CHART_COLORS.length] }
             ]),
             borderRadius: [0, 4, 4, 0]
           }
-        })).reverse(),
+        })),
         emphasis: {
           itemStyle: {
             shadowBlur: 10,
@@ -270,139 +241,48 @@ import StatCard from '../../components/StatCard.astro';
           position: 'right',
           color: '#a6b5c2',
           fontSize: 10,
-          formatter: '{c}'
+          formatter: (p: any) => Number(p.value).toLocaleString('de-DE')
         }
       }]
     });
-    
+
     hideLoading('chart-kulturen-zulassungen');
     window.addEventListener('resize', () => chart.resize());
   }
 
   async function loadKulturGruppenChart() {
+    const data = await getKulturGruppen(10);
+
     const chartEl = document.getElementById('chart-kultur-gruppen');
     if (!chartEl) return;
 
     const chart = echarts.init(chartEl, 'psm');
-    
-    // Top 10 Gruppen
-    const top10Gruppen = kulturGruppen.slice(0, 10);
-    
-    chart.setOption({
-      tooltip: {
-        trigger: 'item',
-        formatter: (params: any) => {
-          return `<strong>${params.name}</strong><br/>Anwendungen: ${params.value.toLocaleString('de-DE')}<br/>Anteil: ${params.percent.toFixed(1)}%`;
-        }
-      },
-      legend: {
-        type: 'scroll',
-        orient: 'vertical',
-        right: 10,
-        top: 20,
-        bottom: 20,
-        textStyle: { color: '#a6b5c2', fontSize: 10 }
-      },
-      series: [{
-        name: 'Kultur-Gruppen',
-        type: 'pie',
-        radius: ['40%', '70%'],
-        center: ['35%', '50%'],
-        avoidLabelOverlap: false,
-        itemStyle: {
-          borderRadius: 8,
-          borderColor: '#0a1929',
-          borderWidth: 2
-        },
-        label: { show: false },
-        emphasis: {
-          label: {
-            show: true,
-            fontSize: 12,
-            fontWeight: 'bold',
-            color: '#fff'
-          }
-        },
-        labelLine: { show: false },
-        data: top10Gruppen.map((g, i) => ({
-          name: g.gruppe,
-          value: g.anzahl,
-          itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] }
-        }))
-      }]
-    });
-    
+    chart.setOption(getBarChartOptions(
+      data.map(d => d.gruppe),
+      data.map(d => d.anzahl),
+      '',
+      true
+    ));
+
     hideLoading('chart-kultur-gruppen');
     window.addEventListener('resize', () => chart.resize());
   }
 
-  async function loadKulturKategorienChart() {
-    const chartEl = document.getElementById('chart-kultur-trend');
+  async function loadMittelJeKulturChart() {
+    const data = await getMittelJeKultur(10);
+
+    const chartEl = document.getElementById('chart-kultur-mittel');
     if (!chartEl) return;
 
-    // Kategorisiere nach Gruppen
-    const kategorien: Record<string, number> = {};
-    
-    allKulturen.forEach(k => {
-      const gruppe = k.gruppe || 'Sonstige';
-      kategorien[gruppe] = (kategorien[gruppe] || 0) + k.awg_count;
-    });
-
-    // Top 10 Kategorien
-    const sortedKategorien = Object.entries(kategorien)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-
     const chart = echarts.init(chartEl, 'psm');
-    
-    chart.setOption({
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' }
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '25%',
-        top: '10%',
-        containLabel: true
-      },
-      xAxis: {
-        type: 'category',
-        data: sortedKategorien.map(k => k[0]),
-        axisLabel: { 
-          color: '#a6b5c2',
-          rotate: 45,
-          fontSize: 9
-        },
-        axisLine: { lineStyle: { color: '#2a3f52' } }
-      },
-      yAxis: {
-        type: 'value',
-        name: 'AWG',
-        axisLabel: { color: '#a6b5c2' },
-        splitLine: { lineStyle: { color: '#1b3448' } }
-      },
-      series: [{
-        type: 'bar',
-        data: sortedKategorien.map((k, i) => ({
-          value: k[1],
-          itemStyle: { 
-            color: CHART_COLORS[i % CHART_COLORS.length],
-            borderRadius: [4, 4, 0, 0]
-          }
-        })),
-        label: {
-          show: true,
-          position: 'top',
-          color: '#a6b5c2',
-          fontSize: 9,
-          formatter: (params: any) => params.value.toLocaleString('de-DE')
-        }
-      }]
-    });
-    
-    hideLoading('chart-kultur-trend');
+    chart.setOption(getBarChartOptions(
+      data.map(d => d.kultur),
+      data.map(d => d.anzahl),
+      '',
+      true
+    ));
+
+    hideLoading('chart-kultur-mittel');
     window.addEventListener('resize', () => chart.resize());
   }
 
@@ -413,21 +293,19 @@ import StatCard from '../../components/StatCard.astro';
 
     let filtered = allKulturen;
 
-    // Search-Filter (sucht in deutschem Namen UND EPPO-Code)
+    // Suche in deutschem Namen, EPPO-Code und Gruppen
     if (searchTerm) {
-      filtered = filtered.filter(k => 
+      filtered = filtered.filter(k =>
         k.kultur_name.toLowerCase().includes(searchTerm) ||
         k.kultur_code.toLowerCase().includes(searchTerm) ||
-        (k.gruppe || '').toLowerCase().includes(searchTerm)
+        (k.gruppen || '').toLowerCase().includes(searchTerm)
       );
     }
 
-    // Gruppen-Filter
     if (gruppeFilter) {
-      filtered = filtered.filter(k => (k.gruppe || 'Sonstige') === gruppeFilter);
+      filtered = filtered.filter(k => gruppenVon(k).includes(gruppeFilter));
     }
 
-    // Sortierung
     filtered = [...filtered].sort((a, b) => {
       switch (sortBy) {
         case 'name': return a.kultur_name.localeCompare(b.kultur_name, 'de');
@@ -456,18 +334,20 @@ import StatCard from '../../components/StatCard.astro';
 
     tbody.innerHTML = data.slice(0, 150).map((k, i) => {
       const percent = ((k.awg_count / maxAwg) * 100).toFixed(1);
-      const anteilGesamt = ((k.awg_count / totalAwg) * 100).toFixed(2);
+      const anteilGesamt = totalAwg ? ((k.awg_count / totalAwg) * 100).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '0';
+      const gruppen = gruppenVon(k);
       return `
         <tr>
           <td class="col-rank">${i + 1}</td>
           <td class="col-kultur">
-            <span class="kultur-name">${k.kultur_name}</span>
+            <span class="kultur-name">${esc(k.kultur_name)}</span>
+            <div class="kultur-sub">${esc(k.kultur_code)}${gruppen.length ? ' · ' + gruppen.map(esc).join(', ') : ''}</div>
           </td>
           <td class="col-code">
-            <code class="eppo-code">${k.kultur_code}</code>
+            <code class="eppo-code">${esc(k.kultur_code)}</code>
           </td>
           <td class="col-gruppe">
-            <span class="gruppe-badge">${k.gruppe || 'Sonstige'}</span>
+            ${gruppen.length ? gruppen.map(g => `<span class="gruppe-badge">${esc(g)}</span>`).join(' ') : '<span class="text-dim">–</span>'}
           </td>
           <td class="col-awg">
             <div class="awg-bar">
@@ -475,7 +355,7 @@ import StatCard from '../../components/StatCard.astro';
               <span class="awg-count">${k.awg_count.toLocaleString('de-DE')}</span>
             </div>
           </td>
-          <td class="col-anteil">${anteilGesamt}%</td>
+          <td class="col-anteil">${anteilGesamt} %</td>
         </tr>
       `;
     }).join('');
@@ -485,7 +365,7 @@ import StatCard from '../../components/StatCard.astro';
     }
   }
 
-  init();
+  init().catch(showLoadError);
 </script>
 
 <style>
@@ -518,7 +398,7 @@ import StatCard from '../../components/StatCard.astro';
 
   .charts-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
     gap: var(--sp-4);
   }
 
@@ -559,7 +439,7 @@ import StatCard from '../../components/StatCard.astro';
 
   .search-input {
     flex: 1;
-    min-width: 250px;
+    min-width: min(100%, 250px);
     max-width: 400px;
     padding: var(--sp-2) var(--sp-3);
     background: var(--surface-2);
@@ -577,6 +457,9 @@ import StatCard from '../../components/StatCard.astro';
     color: var(--text);
     font-size: 0.85rem;
     cursor: pointer;
+    min-width: 0;
+    max-width: 100%;
+    text-overflow: ellipsis;
   }
 
   .search-input:focus,
@@ -595,117 +478,22 @@ import StatCard from '../../components/StatCard.astro';
     font-size: 0.85rem;
   }
 
-  .data-table th,
-  .data-table td {
-    padding: var(--sp-2) var(--sp-3);
-    text-align: left;
-    border-bottom: 1px solid var(--border-1);
-  }
 
-  .data-table th {
-    background: var(--surface-2);
-    font-weight: 600;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
 
-  .data-table tbody tr:hover {
-    background: var(--surface-2);
-  }
 
-  .col-rank {
-    width: 40px;
-    text-align: center;
-    color: var(--text-dim);
-  }
 
-  .col-kultur {
-    min-width: 200px;
-  }
 
-  .kultur-name {
-    font-weight: 500;
-  }
 
-  .col-code {
-    min-width: 100px;
-  }
 
-  .eppo-code {
-    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
-    font-size: 0.75rem;
-    background: var(--surface-3);
-    padding: 2px 6px;
-    border-radius: var(--r-sm);
-    color: var(--primary);
-  }
 
-  .col-gruppe {
-    min-width: 140px;
-  }
 
-  .gruppe-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    background: var(--surface-3);
-    border-radius: var(--r-sm);
-    font-size: 0.75rem;
-    color: var(--text-muted);
-  }
 
-  .col-awg,
-  .col-anteil {
-    text-align: right;
-    white-space: nowrap;
-  }
 
-  .col-awg {
-    min-width: 180px;
-  }
 
-  .awg-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    background: var(--surface-2);
-    border-radius: var(--r-sm);
-    padding: 2px 8px 2px 0;
-    position: relative;
-  }
 
-  .awg-fill {
-    height: 24px;
-    background: linear-gradient(90deg, var(--primary), var(--primary-light, #4ade80));
-    border-radius: var(--r-sm);
-    min-width: 4px;
-    opacity: 0.3;
-    position: absolute;
-    left: 0;
-    top: 0;
-  }
 
-  .awg-count {
-    position: relative;
-    z-index: 1;
-    font-weight: 600;
-    padding-left: var(--sp-2);
-  }
 
-  .col-anteil {
-    color: var(--text-muted);
-    font-size: 0.8rem;
-  }
 
-  .loading-row,
-  .info-row {
-    text-align: center;
-    color: var(--text-dim);
-    padding: var(--sp-6) !important;
-  }
 
   @media (max-width: 768px) {
     .charts-row {
@@ -716,8 +504,106 @@ import StatCard from '../../components/StatCard.astro';
       flex-direction: column;
     }
     
-    .search-input {
+    .search-input,
+    .filter-select {
+      width: 100%;
       max-width: none;
     }
+  }
+</style>
+
+<style is:global>
+  /* Tabellenzeilen entstehen per Skript (innerHTML) und tragen kein Astro-Scope-Attribut,
+     daher global, aber auf diese Tabelle begrenzt. */
+  #kulturen-table th,
+  #kulturen-table td {
+    padding: var(--sp-2) var(--sp-3);
+    text-align: left;
+    border-bottom: 1px solid var(--border-1);
+    vertical-align: top;
+  }
+  #kulturen-table th {
+    background: var(--surface-2);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    vertical-align: bottom;
+  }
+  #kulturen-table tbody tr:hover { background: var(--surface-2); }
+  #kulturen-table .col-rank { width: 40px; text-align: center; color: var(--text-dim); }
+  #kulturen-table .col-kultur { min-width: 150px; }
+  #kulturen-table .kultur-name { font-weight: 500; }
+  #kulturen-table .col-code { min-width: 90px; }
+  #kulturen-table .eppo-code {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-size: 0.75rem;
+    background: var(--surface-3);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    color: var(--primary);
+  }
+  #kulturen-table .col-gruppe { min-width: 200px; }
+  #kulturen-table .gruppe-badge {
+    display: inline-block;
+    margin: 0 4px 4px 0;
+    padding: 2px 8px;
+    background: var(--surface-3);
+    border-radius: var(--r-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  #kulturen-table .col-awg,
+  #kulturen-table .col-anteil { text-align: right; white-space: nowrap; }
+  #kulturen-table .col-awg { min-width: 150px; }
+  #kulturen-table .awg-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    height: 24px;
+    background: var(--surface-2);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+  }
+  #kulturen-table .awg-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    min-width: 4px;
+    background: linear-gradient(90deg, var(--primary), #4ade80);
+    opacity: 0.3;
+  }
+  #kulturen-table .awg-count { position: relative; z-index: 1; font-weight: 600; padding: 0 var(--sp-2); }
+  #kulturen-table .col-anteil { color: var(--text-muted); font-size: 0.8rem; }
+  #kulturen-table .loading-row,
+  #kulturen-table .info-row { text-align: center; color: var(--text-dim); padding: var(--sp-6); }
+  #kulturen-table .text-dim { color: var(--text-dim); }
+  #kulturen-table .kultur-sub { display: none; }
+
+  /* Handy: Code und Gruppen unter dem Namen, Nebenspalten aus – die Zahl bleibt sichtbar */
+  @media (max-width: 600px) {
+    #kulturen-table .col-code,
+    #kulturen-table .col-gruppe,
+    #kulturen-table .col-anteil { display: none; }
+    #kulturen-table .kultur-sub {
+      display: block;
+      margin-top: 2px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+    #kulturen-table .col-kultur { min-width: 0; }
+    #kulturen-table .col-rank { width: 30px; }
+    #kulturen-table .col-awg { min-width: 96px; }
+    #kulturen-table .kultur-name,
+    #kulturen-table .kultur-sub { hyphens: auto; overflow-wrap: anywhere; }
+    #kulturen-table th,
+    #kulturen-table td { padding: var(--sp-2); }
+    #kulturen-table th { text-transform: none; font-size: 0.75rem; }
   }
 </style>

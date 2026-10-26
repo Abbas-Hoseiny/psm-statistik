@@ -5,3 +5,5 @@ interface Window {
   db: import("sql.js").Database | null;
   dbReady: Promise<import("sql.js").Database>;
 }
+
+declare module "sql.js";

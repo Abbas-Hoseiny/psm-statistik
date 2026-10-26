@@ -55,7 +55,8 @@ import ChartContainer from '../components/ChartContainer.astro';
         color="danger" 
       />
       <StatCard 
-        title="Datenstand" 
+        title="BVL-Datenstand" 
+        statKey="datenstand"
         value="..." 
         icon="📅" 
         color="info" 
@@ -71,12 +72,13 @@ import ChartContainer from '../components/ChartContainer.astro';
       />
       <ChartContainer 
         id="chart-kulturen" 
-        title="Top 15 Kulturen" 
+        title="Top 15 Kulturen nach Anwendungsgebieten" 
         height="350px"
       />
       <ChartContainer 
         id="chart-timeline" 
-        title="Zulassungen pro Jahr" 
+        title="Erstzulassung der heute zugelassenen Mittel" 
+        note="Jahr, in dem die heute zugelassenen Mittel erstmals zugelassen wurden. Abgelaufene Mittel enthält die BVL-Datenbank nicht."
         height="350px"
         class="chart-wide"
       />
@@ -92,13 +94,14 @@ import ChartContainer from '../components/ChartContainer.astro';
       <h3>ℹ️ Über diese Daten</h3>
       <p>
         Die Daten stammen aus der offiziellen 
-        <a href="https://www.bvl.bund.de/DE/Arbeitsbereiche/04_Pflanzenschutzmittel/psm_node.html" target="_blank">
-          BVL Pflanzenschutzmittel-Datenbank
+        <a href="https://www.bvl.bund.de/DE/Arbeitsbereiche/04_Pflanzenschutzmittel/01_Aufgaben/02_ZulassungPSM/01_ZugelPSM/01_OnlineDatenbank/psm_onlineDB_node.html" target="_blank" rel="noopener">
+          Online-Datenbank Pflanzenschutzmittel des BVL
         </a>
         und werden automatisch alle 2 Tage aktualisiert.
+        Gezählt werden heute zugelassene Mittel; Kulturen und Schaderreger, die in einem Anwendungsgebiet ausdrücklich ausgenommen sind, zählen nicht mit.
       </p>
       <p class="data-source">
-        Quelle: <code>pflanzenschutz-db</code> Repository
+        Aufbereitung: <a href="https://github.com/Abbas-Hoseiny/pflanzenschutz-db" target="_blank" rel="noopener"><code>pflanzenschutz-db</code></a> · Diagramme: <a href="https://github.com/Abbas-Hoseiny/psm-statistik" target="_blank" rel="noopener"><code>psm-statistik</code></a>
       </p>
     </aside>
   </div>
@@ -106,7 +109,7 @@ import ChartContainer from '../components/ChartContainer.astro';
 
 <script>
   import * as echarts from 'echarts';
-  import { initDatabase } from '../scripts/db';
+  import { initDatabase, showLoadError } from '../scripts/db';
   import { 
     getOverviewStats,
     getWirkstoffeNachKategorie,
@@ -167,8 +170,8 @@ import ChartContainer from '../components/ChartContainer.astro';
       ]);
 
     } catch (error) {
-      console.error('Initialisierung fehlgeschlagen:', error);
       setStatus('error', 'Fehler beim Laden');
+      showLoadError(error);
     }
   }
 

@@ -129,6 +129,15 @@ export const psmTheme = {
   },
 };
 
+/** Schmale Bildschirme (Handy): Legenden unten, kürzere Achsenbeschriftungen */
+export function isNarrow(): boolean {
+  return typeof window !== "undefined" && window.innerWidth < 640;
+}
+
+/** Zahlen deutsch formatieren (1.000 statt 1,000) */
+export const formatZahl = (value: unknown): string =>
+  Number(value).toLocaleString("de-DE");
+
 /**
  * Standard-Optionen für alle Charts
  */
@@ -170,6 +179,7 @@ export function getPieChartOptions(
   data: { name: string; value: number }[],
   title: string
 ): EChartsOption {
+  const narrow = isNarrow();
   return getBaseChartOptions({
     title: {
       text: title,
@@ -178,20 +188,19 @@ export function getPieChartOptions(
     },
     tooltip: {
       trigger: "item",
-      formatter: "{b}: {c} ({d}%)",
+      formatter: (p: any) =>
+        `${p.name}: ${formatZahl(p.value)} (${Number(p.percent).toLocaleString("de-DE", { maximumFractionDigits: 1 })} %)`,
+      confine: true,
       ...psmTheme.tooltip,
     },
-    legend: {
-      orient: "vertical",
-      right: 10,
-      top: "center",
-      ...psmTheme.legend,
-    },
+    legend: narrow
+      ? { type: "plain", orient: "horizontal", bottom: 0, left: "center", itemGap: 10, ...psmTheme.legend, textStyle: { ...psmTheme.legend.textStyle, fontSize: 11 } }
+      : { type: "scroll", orient: "vertical", right: 10, top: "center", ...psmTheme.legend },
     series: [
       {
         type: "pie",
-        radius: ["40%", "70%"],
-        center: ["40%", "50%"],
+        radius: narrow ? ["26%", "46%"] : ["40%", "70%"],
+        center: narrow ? ["50%", "36%"] : ["40%", "50%"],
         avoidLabelOverlap: true,
         itemStyle: {
           borderRadius: 8,
@@ -231,6 +240,7 @@ export function getBarChartOptions(
   title: string,
   horizontal = false
 ): EChartsOption {
+  const narrow = isNarrow();
   const axis = {
     type: "category" as const,
     data: categories,
@@ -239,12 +249,22 @@ export function getBarChartOptions(
       ...psmTheme.categoryAxis.axisLabel,
       rotate: horizontal ? 0 : 30,
       interval: 0,
+      width: horizontal ? (narrow ? 110 : 190) : undefined,
+      overflow: horizontal ? ("truncate" as const) : undefined,
     },
+    // Waagerechte Balken: erster (größter) Eintrag oben
+    inverse: horizontal,
   };
 
   const valueAxis = {
     type: "value" as const,
     ...psmTheme.valueAxis,
+    splitNumber: narrow ? 3 : undefined,
+    axisLabel: {
+      ...psmTheme.valueAxis.axisLabel,
+      hideOverlap: true,
+      formatter: formatZahl,
+    },
   };
 
   return getBaseChartOptions({
@@ -255,10 +275,12 @@ export function getBarChartOptions(
     },
     tooltip: {
       trigger: "axis",
+      confine: true,
+      valueFormatter: formatZahl,
       ...psmTheme.tooltip,
     },
     grid: {
-      left: horizontal ? "20%" : "3%",
+      left: "3%",
       right: "4%",
       bottom: horizontal ? "3%" : "15%",
       containLabel: true,
@@ -302,6 +324,8 @@ export function getLineChartOptions(
     },
     tooltip: {
       trigger: "axis",
+      confine: true,
+      valueFormatter: formatZahl,
       ...psmTheme.tooltip,
     },
     grid: {
@@ -319,6 +343,7 @@ export function getLineChartOptions(
     yAxis: {
       type: "value",
       ...psmTheme.valueAxis,
+      axisLabel: { ...psmTheme.valueAxis.axisLabel, formatter: formatZahl },
     },
     dataZoom: [
       {

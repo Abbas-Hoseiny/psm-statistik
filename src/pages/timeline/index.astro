@@ -6,29 +6,32 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import ChartContainer from '../../components/ChartContainer.astro';
 ---
 
-<BaseLayout title="Timeline">
+<BaseLayout title="Zeitverlauf" description="Erstzulassung, Zulassungsende und Bestand der heute zugelassenen Pflanzenschutzmittel in Deutschland">
   <div class="page">
     <header class="page-header">
-      <h1>📅 Zulassungs-Timeline</h1>
-      <p>Zeitliche Entwicklung der Pflanzenschutzmittel-Zulassungen</p>
+      <h1>📅 Zulassungen im Zeitverlauf</h1>
+      <p>Seit wann und bis wann die heute zugelassenen Pflanzenschutzmittel zugelassen sind. Die BVL-Datenbank enthält nur aktuell zugelassene Mittel.</p>
     </header>
 
     <div class="charts-stack">
       <ChartContainer 
         id="chart-zulassungen" 
-        title="Neue Zulassungen pro Jahr"
+        title="Erstzulassung der heute zugelassenen Mittel"
+        note="Jahr der ersten Zulassung. Mittel, deren Zulassung inzwischen abgelaufen ist, fehlen in den Daten."
         height="400px"
       />
       
       <ChartContainer 
         id="chart-ablauf" 
-        title="Zulassungsende in den nächsten Jahren"
+        title="Zulassungsende in den nächsten zehn Jahren"
+        note="Ende der aktuellen Zulassung, ohne mögliche Verlängerungen."
         height="350px"
       />
 
       <ChartContainer 
         id="chart-kumulativ" 
-        title="Kumulative Entwicklung (aktive Produkte)"
+        title="Bestand der heute zugelassenen Mittel"
+        note="Für vergangene Jahre: wie viele der heutigen Mittel schon zugelassen waren. Für kommende Jahre: wie viele ohne Verlängerung noch gelten."
         height="400px"
       />
     </div>
@@ -37,8 +40,9 @@ import ChartContainer from '../../components/ChartContainer.astro';
 
 <script>
   import * as echarts from 'echarts';
-  import { initDatabase, query } from '../../scripts/db';
-  import { psmTheme, CHART_COLORS, getLineChartOptions, getBarChartOptions } from '../../scripts/charts/theme';
+  import { initDatabase, showLoadError } from '../../scripts/db';
+  import { getZulassungenProJahr, getAblaufendeZulassungen, getBestandVerlauf } from '../../scripts/charts/queries';
+  import { psmTheme, CHART_COLORS, getLineChartOptions, getBarChartOptions, isNarrow } from '../../scripts/charts/theme';
 
   echarts.registerTheme('psm', psmTheme);
 
@@ -53,23 +57,13 @@ import ChartContainer from '../../components/ChartContainer.astro';
     await Promise.all([
       loadZulassungenChart(),
       loadAblaufChart(),
-      loadKumulativChart()
+      loadBestandChart()
     ]);
   }
 
   async function loadZulassungenChart() {
-    const data = await query<{ jahr: string; anzahl: number }>(`
-      SELECT 
-        strftime('%Y', zul_erstmalig_am) as jahr,
-        COUNT(*) as anzahl
-      FROM bvl_mittel
-      WHERE zul_erstmalig_am IS NOT NULL
-        AND zul_erstmalig_am != ''
-        AND strftime('%Y', zul_erstmalig_am) >= '2000'
-      GROUP BY jahr
-      ORDER BY jahr ASC
-    `);
-    
+    const data = await getZulassungenProJahr();
+
     const chartEl = document.getElementById('chart-zulassungen');
     if (!chartEl) return;
 
@@ -79,25 +73,15 @@ import ChartContainer from '../../components/ChartContainer.astro';
       data.map(d => d.anzahl),
       ''
     ));
-    
+
     hideLoading('chart-zulassungen');
     window.addEventListener('resize', () => chart.resize());
   }
 
   async function loadAblaufChart() {
-    const data = await query<{ jahr: string; anzahl: number }>(`
-      SELECT 
-        strftime('%Y', zul_ende) as jahr,
-        COUNT(*) as anzahl
-      FROM bvl_mittel
-      WHERE zul_ende IS NOT NULL
-        AND zul_ende != ''
-        AND zul_ende >= date('now')
-        AND strftime('%Y', zul_ende) <= strftime('%Y', date('now', '+10 years'))
-      GROUP BY jahr
-      ORDER BY jahr ASC
-    `);
-    
+    const data = await getAblaufendeZulassungen();
+    const aktuellesJahr = new Date().getFullYear().toString();
+
     const chartEl = document.getElementById('chart-ablauf');
     if (!chartEl) return;
 
@@ -111,84 +95,67 @@ import ChartContainer from '../../components/ChartContainer.astro';
       ),
       series: [{
         type: 'bar',
-        data: data.map((d, i) => ({
+        name: 'Zulassungsende',
+        data: data.map(d => ({
           value: d.anzahl,
-          itemStyle: { 
-            color: d.jahr === new Date().getFullYear().toString() 
-              ? CHART_COLORS[3]  // Rot für aktuelles Jahr
-              : CHART_COLORS[2], // Amber für Zukunft
+          itemStyle: {
+            color: d.jahr === aktuellesJahr
+              ? CHART_COLORS[3]  // Rot: endet noch in diesem Jahr
+              : CHART_COLORS[2], // Amber: spätere Jahre
             borderRadius: [4, 4, 0, 0]
           }
         }))
       }]
     });
-    
+
     hideLoading('chart-ablauf');
     window.addEventListener('resize', () => chart.resize());
   }
 
-  async function loadKumulativChart() {
-    // Aktive Produkte pro Jahr (kumulativ)
-    const data = await query<{ jahr: string; neu: number; abgelaufen: number }>(`
-      WITH jahre AS (
-        SELECT DISTINCT strftime('%Y', zul_erstmalig_am) as jahr
-        FROM bvl_mittel
-        WHERE zul_erstmalig_am IS NOT NULL
-          AND strftime('%Y', zul_erstmalig_am) >= '2000'
-        UNION
-        SELECT DISTINCT strftime('%Y', zul_ende) as jahr
-        FROM bvl_mittel
-        WHERE zul_ende IS NOT NULL
-          AND strftime('%Y', zul_ende) >= '2000'
-      )
-      SELECT 
-        j.jahr,
-        (SELECT COUNT(*) FROM bvl_mittel 
-         WHERE strftime('%Y', zul_erstmalig_am) = j.jahr) as neu,
-        (SELECT COUNT(*) FROM bvl_mittel 
-         WHERE strftime('%Y', zul_ende) = j.jahr) as abgelaufen
-      FROM jahre j
-      WHERE j.jahr IS NOT NULL
-      ORDER BY j.jahr ASC
-    `);
-    
-    // Kumulativ berechnen
-    let aktiv = 0;
-    const kumulativ = data.map(d => {
-      aktiv = aktiv + d.neu - d.abgelaufen;
-      return { jahr: d.jahr, aktiv: Math.max(0, aktiv), neu: d.neu, abgelaufen: d.abgelaufen };
+  async function loadBestandChart() {
+    const { basis, jahre } = await getBestandVerlauf();
+
+    // Gültig zum Jahresende: bisherige Erstzulassungen minus bisherige Zulassungsenden
+    let bestand = basis;
+    const verlauf = jahre.map(d => {
+      bestand = bestand + d.neu - d.ende;
+      return { jahr: d.jahr, bestand: Math.max(0, bestand), neu: d.neu, ende: d.ende };
     });
-    
+
     const chartEl = document.getElementById('chart-kumulativ');
     if (!chartEl) return;
 
+    const narrow = isNarrow();
     const chart = echarts.init(chartEl, 'psm');
     chart.setOption({
       tooltip: {
         trigger: 'axis',
+        confine: true,
         backgroundColor: 'rgba(22, 44, 62, 0.95)',
         borderColor: '#2a3f52',
-        textStyle: { color: '#e6f0f6' }
+        textStyle: { color: '#e6f0f6' },
+        valueFormatter: (v: any) => Math.abs(Number(v)).toLocaleString('de-DE')
       },
       legend: {
-        data: ['Aktive Produkte', 'Neue Zulassungen', 'Abgelaufen'],
-        textStyle: { color: '#a6b5c2' }
+        data: ['Gültig zum Jahresende', 'Erstzulassungen', 'Zulassungsende'],
+        textStyle: { color: '#a6b5c2', fontSize: narrow ? 10 : 12 }
       },
       grid: {
         left: '3%',
         right: '4%',
+        top: narrow ? 48 : 40,
         bottom: '15%',
         containLabel: true
       },
       xAxis: {
         type: 'category',
-        data: kumulativ.map(d => d.jahr),
+        data: verlauf.map(d => d.jahr),
         axisLabel: { color: '#a6b5c2' },
         axisLine: { lineStyle: { color: '#2a3f52' } }
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#a6b5c2' },
+        axisLabel: { color: '#a6b5c2', formatter: (v: number) => Math.abs(v).toLocaleString('de-DE') },
         splitLine: { lineStyle: { color: '#1b3448' } }
       },
       dataZoom: [
@@ -197,9 +164,9 @@ import ChartContainer from '../../components/ChartContainer.astro';
       ],
       series: [
         {
-          name: 'Aktive Produkte',
+          name: 'Gültig zum Jahresende',
           type: 'line',
-          data: kumulativ.map(d => d.aktiv),
+          data: verlauf.map(d => d.bestand),
           smooth: true,
           lineStyle: { width: 3, color: CHART_COLORS[0] },
           itemStyle: { color: CHART_COLORS[0] },
@@ -215,25 +182,25 @@ import ChartContainer from '../../components/ChartContainer.astro';
           }
         },
         {
-          name: 'Neue Zulassungen',
+          name: 'Erstzulassungen',
           type: 'bar',
-          data: kumulativ.map(d => d.neu),
+          data: verlauf.map(d => d.neu),
           itemStyle: { color: CHART_COLORS[1], opacity: 0.7 }
         },
         {
-          name: 'Abgelaufen',
+          name: 'Zulassungsende',
           type: 'bar',
-          data: kumulativ.map(d => -d.abgelaufen),
+          data: verlauf.map(d => -d.ende),
           itemStyle: { color: CHART_COLORS[3], opacity: 0.7 }
         }
       ]
     });
-    
+
     hideLoading('chart-kumulativ');
     window.addEventListener('resize', () => chart.resize());
   }
 
-  init();
+  init().catch(showLoadError);
 </script>
 
 <style>

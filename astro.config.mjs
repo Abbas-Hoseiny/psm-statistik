@@ -7,9 +7,6 @@ export default defineConfig({
   site: "https://st.digitale-psm.de",
   integrations: [sitemap()],
   vite: {
-    optimizeDeps: {
-      exclude: ["sql.js"],
-    },
     build: {
       rollupOptions: {
         output: {

@@ -16,9 +16,6 @@ export const DB_CONFIG = {
   MANIFEST_URL:
     "https://abbas-hoseiny.github.io/pflanzenschutz-db/manifest.json",
 
-  // SQL.js WASM
-  SQLJS_WASM_URL: "https://sql.js.org/dist/sql-wasm.wasm",
-
   // Cache-Key für IndexedDB
   CACHE_KEY: "psm-statistik-db",
 

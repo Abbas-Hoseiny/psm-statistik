@@ -3,6 +3,10 @@
  * Lädt die BVL SQLite-Datenbank
  */
 import { DB_CONFIG, type DbManifest } from "./config";
+// SQL.js wird lokal mitgebündelt (kein CDN): feste Version, keine Anfrage an Dritte,
+// das WASM-Modul liegt gehasht neben den übrigen Build-Dateien.
+import initSqlJs from "sql.js";
+import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 
 // SQL.js Types
 type SqlJsStatic = {
@@ -29,32 +33,6 @@ interface Statement {
 
 let dbInstance: Database | null = null;
 let dbPromise: Promise<Database> | null = null;
-
-/**
- * Lädt SQL.js von CDN
- */
-async function loadSqlJs(): Promise<
-  (config: { locateFile: (file: string) => string }) => Promise<SqlJsStatic>
-> {
-  return new Promise((resolve, reject) => {
-    if ((window as any).initSqlJs) {
-      resolve((window as any).initSqlJs);
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://sql.js.org/dist/sql-wasm.js";
-    script.onload = () => {
-      if ((window as any).initSqlJs) {
-        resolve((window as any).initSqlJs);
-      } else {
-        reject(new Error("SQL.js konnte nicht geladen werden"));
-      }
-    };
-    script.onerror = () => reject(new Error("SQL.js Script-Ladefehler"));
-    document.head.appendChild(script);
-  });
-}
 
 /**
  * Lädt die Datenbank von der Remote-URL (ZIP-Version)
@@ -84,6 +62,7 @@ async function fetchDatabase(): Promise<ArrayBuffer> {
 
   const compressionMethod = view.getUint16(8, true);
   const compressedSize = view.getUint32(18, true);
+  const uncompressedSize = view.getUint32(22, true);
   const fileNameLength = view.getUint16(26, true);
   const extraFieldLength = view.getUint16(28, true);
   const dataOffset = 30 + fileNameLength + extraFieldLength;
@@ -101,6 +80,23 @@ async function fetchDatabase(): Promise<ArrayBuffer> {
 
     writer.write(compressedData);
     writer.close();
+
+    // Speicher schonen (wichtig auf Handys): Ist die entpackte Größe im ZIP-Kopf
+    // bekannt, landen die Teile direkt im Zielpuffer statt erst in einer Liste.
+    if (uncompressedSize > 0) {
+      const result = new Uint8Array(uncompressedSize);
+      let offset = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        result.set(value, offset);
+        offset += value.length;
+      }
+      console.log(
+        `[DB] ZIP (DEFLATE) entpackt: ${(offset / 1024 / 1024).toFixed(2)} MB`
+      );
+      return result.buffer;
+    }
 
     const chunks: Uint8Array[] = [];
     let totalLength = 0;
@@ -143,10 +139,8 @@ export async function initDatabase(): Promise<Database> {
   dbPromise = (async () => {
     console.log("[DB] Initialisiere SQL.js...");
 
-    const initSqlJs = (window as any).initSqlJs || (await loadSqlJs());
-
     const SQL: SqlJsStatic = await initSqlJs({
-      locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
+      locateFile: () => sqlWasmUrl,
     });
 
     const dbBuffer = await fetchDatabase();
@@ -160,7 +154,59 @@ export async function initDatabase(): Promise<Database> {
     return dbInstance;
   })();
 
+  dbPromise.catch(() => {
+    dbPromise = null;
+  });
+
   return dbPromise;
+}
+
+/**
+ * Zeigt auf der Seite an, dass die Daten nicht geladen werden konnten,
+ * statt Ladekreise endlos drehen zu lassen.
+ */
+export function showLoadError(error: unknown): void {
+  console.error("[DB] Laden fehlgeschlagen:", error);
+  const message =
+    "Die Daten konnten nicht geladen werden. Bitte die Seite neu laden.";
+  document.querySelectorAll<HTMLElement>(".chart-loading").forEach((el) => {
+    el.querySelector(".spinner")?.remove();
+    const label = el.querySelector("span");
+    if (label) label.textContent = message;
+  });
+  document.querySelectorAll<HTMLElement>(".loading-row").forEach((el) => {
+    el.textContent = message;
+  });
+}
+
+/**
+ * Maskiert Text für die Ausgabe per innerHTML.
+ */
+export function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Formatiert einen BVL-Zeitstempel als deutsches Datum.
+ * Die BVL liefert Mitternacht deutscher Zeit als UTC (22:00Z/23:00Z am Vortag);
+ * +12 Stunden ergibt zuverlässig den richtigen Kalendertag.
+ */
+export function formatBvlDate(value: unknown): string {
+  if (typeof value !== "string" || !value) return "Unbekannt";
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) return value;
+  const day = new Date(time + 12 * 60 * 60 * 1000);
+  return day.toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 /**

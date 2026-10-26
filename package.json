@@ -1,8 +1,8 @@
 {
   "name": "psm-statistik",
   "type": "module",
-  "version": "1.0.0",
-  "description": "Statistik-Dashboard für BVL Pflanzenschutzmittel-Datenbank",
+  "version": "1.1.0",
+  "description": "Statistik-Dashboard für die BVL-Pflanzenschutzmittel-Datenbank",
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
@@ -13,11 +13,11 @@
   "dependencies": {
     "@astrojs/sitemap": "^3.6.0",
     "astro": "^5.1.1",
-    "echarts": "^5.5.1"
+    "echarts": "^5.5.1",
+    "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
-    "sql.js": "^1.13.0",
     "typescript": "^5.7.2"
   },
   "repository": {
@@ -25,5 +25,6 @@
     "url": "https://github.com/Abbas-Hoseiny/psm-statistik.git"
   },
   "author": "Abbas Hoseiny",
-  "license": "MIT"
+  "license": "MIT",
+  "homepage": "https://st.digitale-psm.de"
 }
